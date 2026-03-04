@@ -78,6 +78,35 @@ CEO24 — веб-приложение с монолитной архитекту
 | Контейнеры | Docker + docker-compose | Единый деплой |
 | Web-сервер | nginx | Reverse proxy, HTTPS, статика |
 
+## Файловая структура (актуальная)
+
+```
+backend/
+├── pyproject.toml          # hatchling build, deps, ruff, pytest
+├── Dockerfile              # python:3.12-slim
+├── .env.example
+├── .venv/                  # Python 3.12 via uv (не в git)
+├── app/
+│   ├── main.py             # FastAPI app, CORS, /health
+│   ├── core/
+│   │   ├── config.py       # Settings (pydantic-settings, .env)
+│   │   └── database.py     # SQLModel engine, get_session DI
+│   └── models/
+│       ├── __init__.py     # re-exports
+│       ├── organization.py # Organization + OrgType + OrgStatus
+│       ├── contract.py     # Contract + ContractType + ContractStatus
+│       └── document.py     # Document + DocType
+└── tests/
+    └── test_models.py      # 8 unit-тестов
+docker-compose.yml          # db (postgres:16-alpine) + backend
+```
+
+## Настройка окружения
+
+- Python 3.12 через `uv`: `cd backend && uv venv --python 3.12 .venv && source .venv/bin/activate && uv pip install -e ".[dev]"`
+- БД для разработки: `docker compose up -d db` (PostgreSQL 16)
+- Тесты: `cd backend && python -m pytest -v` (SQLite in-memory для unit-тестов)
+
 ## Нефункциональные требования и ограничения
 
 - Импорт < 5 сек для 4600 строк

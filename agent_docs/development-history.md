@@ -22,3 +22,41 @@
 **Ключевые решения:** ADR-001..005 (монолит, SQLModel, иммутабельные снапшоты, три источника данных, расширенная модель organizations)
 
 **Следующий шаг:** Создание implementation plan, scaffold проекта
+
+### 2026-03-04 — Scaffold backend (Tasks 1-3)
+
+**Что сделано:**
+- Создан implementation plan: `docs/plans/2026-03-04-ceo24-mvp-implementation.md` (25 задач, 6 фаз)
+- Task 1: Backend scaffold — pyproject.toml (hatchling), FastAPI app с CORS и /health, pydantic-settings конфиг, SQLModel database module
+- Task 2: Docker Compose (postgres:16-alpine + backend) и Dockerfile. Docker не установлен на машине — файлы готовы к использованию
+- Task 3: SQLModel модели — Organization (15+ полей, OrgType/OrgStatus enum), Contract (автоклассификация, ContractType enum), Document (DocType enum, denormalized org FK). 8 unit-тестов
+
+**Окружение:**
+- Python 3.12.12 через `uv` (venv в `backend/.venv`)
+- Docker отсутствует на машине — для тестов используется SQLite in-memory
+- Git-репозиторий инициализирован
+
+**Файловая структура:**
+```
+backend/
+├── pyproject.toml          # hatchling, deps, ruff, pytest config
+├── Dockerfile
+├── .env.example
+├── app/
+│   ├── main.py             # FastAPI app + CORS + /health
+│   ├── core/
+│   │   ├── config.py       # Settings via pydantic-settings
+│   │   └── database.py     # SQLModel engine + get_session
+│   └── models/
+│       ├── __init__.py      # re-exports всех моделей
+│       ├── organization.py  # Organization + OrgType + OrgStatus
+│       ├── contract.py      # Contract + ContractType + ContractStatus
+│       └── document.py      # Document + DocType
+└── tests/
+    └── test_models.py       # 8 тестов
+docker-compose.yml           # PostgreSQL + backend
+```
+
+**Ключевые решения:** ADR-006 (uv вместо pip для управления зависимостями)
+
+**Следующий шаг:** Tasks 4-5 (остальные модели + Alembic миграции)
