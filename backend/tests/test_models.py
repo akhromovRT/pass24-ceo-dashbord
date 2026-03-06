@@ -3,6 +3,10 @@ from decimal import Decimal
 from app.models.organization import OrgStatus, OrgType, Organization
 from app.models.contract import Contract, ContractStatus, ContractType
 from app.models.document import DocType, Document
+from app.models.snapshot import MonthlySnapshot
+from app.models.import_run import ImportRun, ImportStatus
+from app.models.user import User, UserRole
+from app.models.alert import Alert, AlertType, AlertSeverity, AlertStatus
 
 
 class TestOrganization:
@@ -101,3 +105,128 @@ class TestDocument:
                 amount=Decimal("100.00"),
             )
             assert doc.doc_type == dt
+
+
+class TestMonthlySnapshot:
+    def test_create_snapshot(self):
+        import uuid
+
+        org_id = uuid.uuid4()
+        snap = MonthlySnapshot(
+            organization_id=org_id,
+            year=2026,
+            month=1,
+            debt_start=Decimal("10000.00"),
+            sold=Decimal("5000.00"),
+            paid=Decimal("3000.00"),
+            debt_end=Decimal("12000.00"),
+            collectability=Decimal("60.00"),
+            is_active=True,
+        )
+        assert snap.organization_id == org_id
+        assert snap.year == 2026
+        assert snap.month == 1
+        assert snap.debt_start == Decimal("10000.00")
+        assert snap.sold == Decimal("5000.00")
+        assert snap.paid == Decimal("3000.00")
+        assert snap.debt_end == Decimal("12000.00")
+        assert snap.collectability == Decimal("60.00")
+        assert snap.is_active is True
+
+    def test_default_is_active(self):
+        import uuid
+
+        snap = MonthlySnapshot(
+            organization_id=uuid.uuid4(), year=2026, month=2,
+        )
+        assert snap.is_active is True
+
+
+class TestImportRun:
+    def test_create_import_run(self):
+        run = ImportRun(
+            filename="debt_report.xlsx",
+            file_hash="abc123" * 10 + "abcd",
+            status=ImportStatus.COMPLETED,
+            buyers_count=243,
+            contracts_count=200,
+            documents_count=1000,
+        )
+        assert run.filename == "debt_report.xlsx"
+        assert run.status == ImportStatus.COMPLETED
+        assert run.buyers_count == 243
+
+    def test_default_status_is_pending(self):
+        run = ImportRun(filename="test.xlsx", file_hash="a" * 64)
+        assert run.status == ImportStatus.PENDING
+
+    def test_json_fields(self):
+        run = ImportRun(
+            filename="test.xlsx",
+            file_hash="a" * 64,
+            errors=["row 5: missing INN"],
+            delta_summary={"new_buyers": 3},
+        )
+        assert run.errors == ["row 5: missing INN"]
+        assert run.delta_summary == {"new_buyers": 3}
+
+
+class TestUser:
+    def test_create_user(self):
+        user = User(
+            name="Алексей Хромов",
+            email="admin@onvi-service.ru",
+            hashed_password="hashed",
+            role=UserRole.ADMIN,
+        )
+        assert user.name == "Алексей Хромов"
+        assert user.email == "admin@onvi-service.ru"
+        assert user.role == UserRole.ADMIN
+        assert user.is_active is True
+
+    def test_default_role_is_viewer(self):
+        user = User(
+            name="Test", email="test@test.ru", hashed_password="hashed",
+        )
+        assert user.role == UserRole.VIEWER
+
+    def test_all_roles(self):
+        for role in UserRole:
+            user = User(
+                name="T", email=f"{role.value}@t.ru", hashed_password="h", role=role,
+            )
+            assert user.role == role
+
+
+class TestAlert:
+    def test_create_alert(self):
+        import uuid
+
+        org_id = uuid.uuid4()
+        alert = Alert(
+            organization_id=org_id,
+            alert_type=AlertType.NON_PAYMENT,
+            severity=AlertSeverity.CRITICAL,
+            title="Неоплата 3+ месяцев",
+            description="Клиент не платит с октября",
+            metric_value=90.0,
+            threshold=60.0,
+        )
+        assert alert.organization_id == org_id
+        assert alert.alert_type == AlertType.NON_PAYMENT
+        assert alert.severity == AlertSeverity.CRITICAL
+        assert alert.title == "Неоплата 3+ месяцев"
+        assert alert.status == AlertStatus.OPEN
+
+    def test_default_status_is_open(self):
+        alert = Alert(
+            alert_type=AlertType.NEW_CLIENT,
+            severity=AlertSeverity.INFO,
+            title="Новый клиент",
+        )
+        assert alert.status == AlertStatus.OPEN
+
+    def test_all_alert_types(self):
+        for at in AlertType:
+            alert = Alert(alert_type=at, title="test", severity=AlertSeverity.INFO)
+            assert alert.alert_type == at
