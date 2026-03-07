@@ -6,6 +6,8 @@ from pathlib import Path
 
 import openpyxl
 
+from app.parser.utils import load_workbook_any
+
 _INVOICE_RE = re.compile(
     r"(?:СЧЕТ(?:У|А)?|СЧ\.?)\s*№\s*([\w\-/]+)",
     re.IGNORECASE,
@@ -114,7 +116,7 @@ def _parse_date_cell(value) -> date | None:
 
 def parse_bank_statement(file_path: str | Path) -> BankStatementResult:
     file_path = Path(file_path)
-    wb = openpyxl.load_workbook(file_path)
+    wb = load_workbook_any(file_path)
     ws = wb.active
 
     result = BankStatementResult(filename=file_path.name)

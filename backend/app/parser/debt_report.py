@@ -8,6 +8,8 @@ from pathlib import Path
 
 import openpyxl
 
+from app.parser.utils import load_workbook_any
+
 
 class HierarchyLevel(str, enum.Enum):
     BUYER = "buyer"
@@ -174,7 +176,7 @@ def parse_debt_report(file_path: str | Path) -> ParseResult:
     # Compute file hash
     file_hash = hashlib.sha256(file_path.read_bytes()).hexdigest()
 
-    wb = openpyxl.load_workbook(file_path)
+    wb = load_workbook_any(file_path)
     ws = wb.active
 
     result = ParseResult(
