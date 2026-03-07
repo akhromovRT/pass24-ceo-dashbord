@@ -8,7 +8,7 @@ const auth = useAuthStore()
 
 const navItems = [
   { label: 'Dashboard', icon: 'pi pi-chart-bar', route: '/' },
-  { label: 'Биллинг', icon: 'pi pi-list', route: '/billing' },
+  { label: 'Реестр клиентов', icon: 'pi pi-list', route: '/billing' },
   { label: 'Должники', icon: 'pi pi-exclamation-triangle', route: '/debtors' },
   { label: 'Импорт', icon: 'pi pi-upload', route: '/import' },
 ]
