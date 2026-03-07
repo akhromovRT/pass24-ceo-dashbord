@@ -34,8 +34,9 @@ CEO24 — веб-приложение с монолитной архитекту
 ### Backend (`backend/`)
 - **FastAPI** — async REST API, автогенерация Swagger
 - **SQLModel** — ORM + Pydantic-схемы в одной модели, миграции через Alembic
-- **Парсер 1С** — `openpyxl` + `xlrd`: разбор 3-уровневой иерархии (Покупатель→Договор→Документ)
+- **Парсер 1С** — `openpyxl` + `xlrd` (через `load_workbook_any()`): разбор 3-уровневой иерархии (Покупатель→Договор→Документ), поддержка .xls и .xlsx
 - **Парсер выписки** — матчинг платежей по ИНН, извлечение периода из назначения
+- **Seed-скрипт** — `scripts/seed_data.py`: импорт аналитики поступлений (метаданные объектов, план/факт)
 - **JWT-авторизация** — роли: admin, manager, viewer
 
 ### Frontend (`frontend/`)
@@ -46,8 +47,9 @@ CEO24 — веб-приложение с монолитной архитекту
 
 ### Инфраструктура
 - **PostgreSQL 16** — JSONB, оконные функции, CTE
-- **Docker + docker-compose** — PostgreSQL + backend + frontend + nginx
-- **nginx** — reverse proxy, HTTPS, статика Vue
+- **Docker + docker-compose** — PostgreSQL + backend + frontend (nginx baked into image, без volumes)
+- **nginx** — reverse proxy `/api` → backend:8000, статика Vue
+- **Сервер:** Timeweb VPS 85.239.51.34, firewall: порты 22/80/443
 
 ## Потоки данных
 
@@ -83,22 +85,60 @@ CEO24 — веб-приложение с монолитной архитекту
 ```
 backend/
 ├── pyproject.toml          # hatchling build, deps, ruff, pytest
-├── Dockerfile              # python:3.12-slim
-├── .env.example
-├── .venv/                  # Python 3.12 via uv (не в git)
+├── Dockerfile              # python:3.12-slim + alembic + scripts
+├── alembic.ini
+├── alembic/                # Миграции БД
+├── scripts/
+│   └── seed_data.py        # Импорт аналитики поступлений
 ├── app/
-│   ├── main.py             # FastAPI app, CORS, /health
+│   ├── main.py             # FastAPI app, CORS, /health, все роутеры
 │   ├── core/
 │   │   ├── config.py       # Settings (pydantic-settings, .env)
 │   │   └── database.py     # SQLModel engine, get_session DI
-│   └── models/
-│       ├── __init__.py     # re-exports
-│       ├── organization.py # Organization + OrgType + OrgStatus
-│       ├── contract.py     # Contract + ContractType + ContractStatus
-│       └── document.py     # Document + DocType
-└── tests/
-    └── test_models.py      # 8 unit-тестов
-docker-compose.yml          # db (postgres:16-alpine) + backend
+│   ├── models/
+│   │   ├── organization.py # Organization + OrgType + OrgStatus
+│   │   ├── contract.py     # Contract + ContractType + ContractStatus
+│   │   ├── document.py     # Document + DocType
+│   │   ├── snapshot.py     # MonthlySnapshot
+│   │   ├── import_run.py   # ImportRun + ImportStatus
+│   │   ├── user.py         # User + UserRole
+│   │   └── alert.py        # Alert + AlertType + AlertSeverity
+│   ├── api/v1/
+│   │   ├── auth.py         # POST /auth/login
+│   │   ├── organizations.py # GET /organizations, /{inn}, /snapshots, /contracts
+│   │   ├── contracts.py    # GET /contracts (join + search + sort)
+│   │   ├── dashboard.py    # GET /dashboard/summary, /mrr-trend, /aging
+│   │   ├── billing.py      # GET /billing/debtors
+│   │   ├── imports.py      # POST /import/upload, GET /import/runs
+│   │   └── alerts.py       # GET /alerts, PATCH /{id}
+│   ├── parser/
+│   │   ├── utils.py        # load_workbook_any() — .xls/.xlsx support
+│   │   ├── classifier.py   # classify_contract()
+│   │   ├── debt_report.py  # parse_debt_report()
+│   │   └── bank_statement.py # parse_bank_statement()
+│   └── services/
+│       └── import_service.py # ImportService.process_import()
+└── tests/                  # 74 тестов
+frontend/
+├── nginx.conf              # Reverse proxy config (baked into image)
+├── Dockerfile              # Multi-stage: node build → nginx
+├── src/
+│   ├── main.ts
+│   ├── router.ts
+│   ├── api/client.ts       # Axios + Bearer token
+│   ├── stores/
+│   │   ├── auth.ts
+│   │   └── organizations.ts
+│   ├── components/
+│   │   └── Sidebar.vue     # Навигация: Dashboard, Реестр клиентов, Должники, Импорт
+│   └── views/
+│       ├── LoginView.vue
+│       ├── BillingView.vue      # Режим: По клиентам / По договорам
+│       ├── ClientCardView.vue
+│       ├── DashboardView.vue
+│       ├── DebtorsView.vue
+│       └── ImportView.vue
+docker-compose.yml          # db + backend + frontend (без volumes)
 ```
 
 ## Настройка окружения

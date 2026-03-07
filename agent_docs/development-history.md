@@ -177,3 +177,42 @@ frontend/src/
 ```
 
 **Следующий шаг:** Phase 5 — Tasks 18-19 (Payment Score + DebtorsView)
+
+### 2026-03-06 — MVP complete (Tasks 18-25)
+
+**Что сделано:**
+- Tasks 18-25: DashboardView (4 KPI-карточки, MRR-тренд ECharts, aging bar chart), DebtorsView (DataTable с фильтром min_debt), ImportView (drag-and-drop загрузка XLS/XLSX, история импортов), Payment Score расчёт, Sidebar + Layout, Alerts panel
+- Frontend Nginx для production-сборки
+- seed_data.py скрипт для загрузки аналитики поступлений (метаданные объектов, план/факт, адреса)
+
+**Тесты:** 74/74 backend passed. Frontend builds successfully
+
+### 2026-03-07 — Деплой + Contracts Registry + Fixes
+
+**Что сделано:**
+- **Деплой на Timeweb VPS** (85.239.51.34): Docker Compose (PostgreSQL + FastAPI + Vue/Nginx), настройка firewall (порты 22, 80, 443), Alembic миграции, seed admin user
+- **Docker fixes:** убраны volumes из docker-compose.yml (managed platform restriction), nginx.conf скопирован в frontend build context вместо bind mount, backend Dockerfile дополнен COPY для alembic/, alembic.ini, scripts/
+- **XLS support:** создан `backend/app/parser/utils.py` — `load_workbook_any()` конвертирует .xls (xlrd) → openpyxl Workbook. Обновлены debt_report.py и bank_statement.py
+- **Импорт данных:** загружен отчёт «Задолженность покупателей» (268 orgs, 376 contracts, 3814 docs) + аналитика поступлений через seed_data.py (176 orgs обновлено, 182 contracts, 3428 snapshots)
+- **Contracts API:** новый endpoint `GET /api/v1/contracts` — join Contract+Organization, search, sort (org_name/monthly_amount/contract_date), pagination
+- **BillingView v2:** режим-переключатель SelectButton ("По клиентам" / "По договорам"), таблица договоров с 11 колонками (Контрагент, ИНН, Договор, Дата, АП/мес, Тип объекта, Статус, Облако, № сист., Оборудование, Адрес)
+- **Sidebar:** label "Биллинг" → "Реестр клиентов"
+- **Очистка БД:** удалены 3 пустых import_runs (0 buyers/contracts/docs)
+
+**Dashboard метрики:** MRR 4,483,322₽, ARR 53,799,866₽, 273 активных клиента, 6,172,462₽ общий долг
+
+**Файловая структура (новое):**
+```
+backend/app/parser/utils.py        # load_workbook_any() — .xls/.xlsx support
+backend/app/api/v1/contracts.py    # GET /contracts — join + search + sort + pagination
+frontend/nginx.conf                # Скопирован в build context (не bind mount)
+```
+
+**API endpoints (добавлено):**
+```
+GET /api/v1/contracts(?search,sort_by,sort_dir,page,page_size)
+```
+
+**Ключевые решения:** ADR-007 (без volumes в Docker), ADR-008 (xlrd конвертация), ADR-009 (режим-переключатель в реестре)
+
+**Следующий шаг:** Импорт банковской выписки через UI, расширение парсера аналитики
