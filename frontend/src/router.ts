@@ -36,6 +36,18 @@ const routes = [
     component: () => import('./views/ImportView.vue'),
     meta: { requiresAuth: true },
   },
+  {
+    path: '/profile',
+    name: 'profile',
+    component: () => import('./views/ProfileView.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/users',
+    name: 'users',
+    component: () => import('./views/UsersView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true },
+  },
 ]
 
 const router = createRouter({
@@ -47,6 +59,16 @@ router.beforeEach((to) => {
   const token = localStorage.getItem('token')
   if (to.meta.requiresAuth && !token) {
     return { name: 'login' }
+  }
+  if (to.meta.requiresAdmin) {
+    const userStr = localStorage.getItem('user')
+    if (!userStr) return { name: 'dashboard' }
+    try {
+      const u = JSON.parse(userStr)
+      if (u.role !== 'admin') return { name: 'dashboard' }
+    } catch {
+      return { name: 'dashboard' }
+    }
   }
 })
 
