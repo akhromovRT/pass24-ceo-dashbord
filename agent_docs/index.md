@@ -30,6 +30,7 @@
 - `agent_docs/guides/environment-setup.md` — настройка окружения; применять при инициализации проекта.
 - `agent_docs/guides/logging.md` — логирование скриптов/интеграций.
 - `agent_docs/guides/archiving-and-temp.md` — архивация и временные файлы.
+- `agent_docs/guides/runbook.md` — операционный runbook production-сервера.
 
 ## Шаблоны
 - `agent_docs/templates/architecture.md`

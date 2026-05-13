@@ -187,6 +187,42 @@ frontend/src/
 
 **Тесты:** 74/74 backend passed. Frontend builds successfully
 
+### 2026-05-13 — Инцидент: восстановление + security hotfix + reliability + persistent БД (P0/P1/P2)
+
+**Что сделано:**
+- **Инцидент:** обнаружено, что http://85.239.51.34 не открывается (порт 80 closed). Диагностика: контейнеры в статусе `Exited (255)` 4 недели назад, не удалены. Причина — отсутствие `restart: unless-stopped` в compose и (вероятно) перезапуск Docker daemon на стороне Timeweb.
+- **P0 Recovery:**
+  - SSH-ключ: `~/.ssh/ceo24_ed25519`, alias `ceo24` в `~/.ssh/config`. Запись добавлена.
+  - Дамп БД до любых изменений: `~/Backups/ceo24/ceo24-pre-recovery-2026-05-13-1656.dump` (385 KB)
+  - Стек поднят через `docker compose up -d`. Данные на месте: 273 orgs, 557 contracts, 3814 docs, 3428 snapshots, MRR 4 483 322 ₽ (совпало с эталоном).
+- **P0.6 Security hotfix:** все 6 data-роутеров (dashboard, billing, organizations, contracts, alerts, imports) использовали `Depends(get_session)` без `get_current_user` — финансовые данные ОНВИ СЕРВИС публично утекали через `/api/v1/dashboard/summary` и т.д. Добавлен router-level `dependencies=[Depends(get_current_user)]`. Тесты обновлены (override в conftest-стиле). 70 passed, 9 skipped (file-based parsers без артефактов). ADR-011 зафиксирован.
+- **P1 Reliability:**
+  - `restart: unless-stopped` для всех 3 сервисов
+  - healthchecks: backend `/health`, frontend `wget /`, db `pg_isready`
+  - лог-ротация `json-file 10MB × 3`
+  - swap 2 GB (swappiness=10) — система была без swap при 2 GB RAM
+  - auto-recovery test: `docker kill backend` → через ~12 сек снова Up
+- **P2 Persistent storage:**
+  - Bind mount `/srv/ceo24/pgdata:/var/lib/postgresql/data` (uid 70, chmod 700)
+  - Дамп → восстановление в новый bind mount → 273 orgs (совпало)
+  - Persistence test: `docker compose rm -fs db && up -d db` → 273 orgs остались. ADR-007 помечен superseded by ADR-010.
+- **P2.3 Автобэкап:** `/usr/local/bin/ceo24-backup.sh` (pg_dump -Fc | gzip, retention 14 дней), cron `/etc/cron.d/ceo24-backup` 03:00 UTC. Первый бэкап: 377 KB gz.
+- **P2.4 Pull на ноут:** launchd-агент `com.akhromov.ceo24-backup-pull` 05:00 локального → `~/Backups/ceo24/`. Первый pull выполнен.
+- **Runbook:** `agent_docs/guides/runbook.md` — операционные процедуры (диагностика, восстановление из дампа, деплой, сброс пароля).
+- **Документация:** исправлен `agent_docs/index.md` (admin login — это email `admin@onvi-service.ru`, не `admin`). Локальные креды в `~/.config/ceo24/credentials` (chmod 600).
+
+**ADR:** ADR-010 (persistent pg через bind mount), ADR-011 (router-level auth dependency), ADR-007 superseded.
+
+**Метрики (после восстановления):** MRR 4 483 322 ₽, ARR 53 799 866 ₽, 273 активных клиента, 6 172 462 ₽ долг (совпало с эталоном 2026-03-07 — никаких потерь).
+
+**Не сделано / отложено:**
+- Сброс admin-пароля (генерация выполнена локально, новый хеш в `~/.config/ceo24/credentials`, но UPDATE в production users заблокирован auto-policy — требует явного одобрения)
+- UptimeRobot (P1.3) — интерактивная настройка через web-UI, оставлено пользователю
+- DR-drill в изолированную БД (P2.5) — частично закрыто фактом успешного restore при миграции на bind mount
+- P3 (фичи) — план зафиксирован, начнётся после стабилизации
+
+**Следующий шаг:** Сброс admin-пароля (или установка пользовательского). После этого — UptimeRobot, затем переход к P3.1 (сверка платежей с банк-выпиской через UI).
+
 ### 2026-03-07 — Деплой + Contracts Registry + Fixes
 
 **Что сделано:**

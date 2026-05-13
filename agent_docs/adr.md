@@ -53,10 +53,11 @@
 ### ADR-007: Docker без named volumes (Timeweb)
 
 **Дата:** 2026-03-07
-**Статус:** Принято
-**Контекст:** Timeweb managed platform запрещает `volumes` в docker-compose.yml. При деплое — ошибка «volumes is not allowed».
+**Статус:** Superseded by ADR-010 (2026-05-13)
+**Контекст:** Предполагалось, что Timeweb managed platform запрещает `volumes` в docker-compose.yml. При деплое 2026-03-07 наблюдалась ошибка «volumes is not allowed».
 **Решение:** Убрать все volumes (pgdata, nginx.conf bind mount). Nginx config копируется в образ через `COPY nginx.conf` в frontend/Dockerfile. PostgreSQL данные хранятся внутри контейнера (для MVP приемлемо).
 **Последствия:** Данные БД теряются при пересоздании контейнера. Для production — добавить managed PostgreSQL или external volume. Nginx config меняется через rebuild образа.
+**Почему superseded:** При диагностике 2026-05-13 выяснилось, что хост — обычный Ubuntu 24.04 VPS, не managed Apps. Bind mount работает без ограничений. См. ADR-010.
 
 ### ADR-008: xlrd для поддержки .xls (OLE2)
 
@@ -73,3 +74,19 @@
 **Контекст:** Реестр должен показывать как обзор по клиентам (org-level), так и детальный вид по договорам (contract-level с 11+ полями). Два отдельных раздела — лишняя навигация.
 **Решение:** SelectButton "По клиентам" / "По договорам" в BillingView. Общие поиск и pagination, разные DataTable. Клик по строке в обоих режимах ведёт на карточку клиента.
 **Последствия:** Один URL, два представления. Серверная пагинация и сортировка для обоих режимов. Новый endpoint `GET /api/v1/contracts` с join Contract+Organization.
+
+### ADR-010: PostgreSQL persistence через bind mount на хосте
+
+**Дата:** 2026-05-13
+**Статус:** Принято
+**Контекст:** ADR-007 (без volumes) основывался на ошибочной посылке о managed Apps-окружении Timeweb. После инцидента 2026-05-13 (28-дневный downtime + Exit 255) проведена диагностика: хост — обычный Ubuntu 24.04 VPS, никаких ограничений на volumes. Параллельно решено не переходить на managed PostgreSQL по соображениям бюджета.
+**Решение:** PostgreSQL хранит данные в bind mount `/srv/ceo24/pgdata` на хосте. Каталог создан вне рабочей директории проекта (`/root/pass24-ceo-dashbord/`), что делает данные независимыми от `git pull` и пересоздания compose. Владелец — uid 70 (postgres в alpine), права 700. Проверено: `docker compose rm -fs db && up -d db` → данные остаются на месте.
+**Последствия:** Пересоздание контейнера `db` (ребилд, обновление образа, миграция) не теряет данные. Бэкап выполняется отдельно через cron + `pg_dump -Fc` (см. `/usr/local/bin/ceo24-backup.sh` на сервере). ADR-007 помечен superseded.
+
+### ADR-011: Router-level auth dependency
+
+**Дата:** 2026-05-13
+**Статус:** Принято
+**Контекст:** Инцидент 2026-05-13: при диагностике обнаружено, что только `/auth` использует `Depends(get_current_user)`. Остальные роутеры (dashboard, billing, organizations, contracts, alerts, imports) принимают `Depends(get_session)` без проверки токена. Все финансовые данные ОНВИ СЕРВИС были публично доступны через HTTP API.
+**Решение:** Применить guard на уровне роутера: `APIRouter(prefix=..., dependencies=[Depends(get_current_user)])`. Это закрывает все эндпоинты роутера одной строкой и устойчиво к забывчивости при добавлении новых эндпоинтов.
+**Последствия:** Auth обязателен для всех data-эндпоинтов. `/auth/login`, `/health`, `/docs`, `/openapi.json` остаются открытыми (нужны для UX и health-check). Тесты с TestClient переопределяют `get_current_user` через `app.dependency_overrides`.
