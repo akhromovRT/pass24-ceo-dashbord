@@ -4,12 +4,17 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from sqlmodel import Session, select
 
+from app.api.v1.auth import get_current_user
 from app.core.database import get_session
 from app.models import ImportRun
 from app.parser.debt_report import parse_debt_report
 from app.services.import_service import ImportService
 
-router = APIRouter(prefix="/import", tags=["import"])
+router = APIRouter(
+    prefix="/import",
+    tags=["import"],
+    dependencies=[Depends(get_current_user)],
+)
 
 
 @router.post("/upload")

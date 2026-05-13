@@ -3,10 +3,15 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session, select, func, col
 
+from app.api.v1.auth import get_current_user
 from app.core.database import get_session
 from app.models import Organization, Contract, MonthlySnapshot, OrgStatus
 
-router = APIRouter(prefix="/organizations", tags=["organizations"])
+router = APIRouter(
+    prefix="/organizations",
+    tags=["organizations"],
+    dependencies=[Depends(get_current_user)],
+)
 
 
 @router.get("")

@@ -1,11 +1,16 @@
 from fastapi import APIRouter, Depends, Query
 from sqlmodel import Session, col, func, select
 
+from app.api.v1.auth import get_current_user
 from app.core.database import get_session
 from app.models.contract import Contract
 from app.models.organization import Organization
 
-router = APIRouter(prefix="/contracts", tags=["contracts"])
+router = APIRouter(
+    prefix="/contracts",
+    tags=["contracts"],
+    dependencies=[Depends(get_current_user)],
+)
 
 SORT_FIELDS = {
     "monthly_amount": col(Contract.monthly_amount),

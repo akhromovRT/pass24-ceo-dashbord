@@ -4,9 +4,10 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, SQLModel, create_engine
 
+from app.api.v1.auth import get_current_user
 from app.core.database import get_session
 from app.main import app
-from app.models import Organization, OrgStatus
+from app.models import Organization, OrgStatus, User, UserRole
 
 
 @pytest.fixture
@@ -14,7 +15,17 @@ def client(db_session: Session):
     def override_get_session():
         yield db_session
 
+    def override_get_current_user():
+        return User(
+            name="Test",
+            email="test@example.com",
+            hashed_password="x",
+            role=UserRole.ADMIN,
+            is_active=True,
+        )
+
     app.dependency_overrides[get_session] = override_get_session
+    app.dependency_overrides[get_current_user] = override_get_current_user
     yield TestClient(app)
     app.dependency_overrides.clear()
 

@@ -1,10 +1,15 @@
 from fastapi import APIRouter, Depends
 from sqlmodel import Session, select, func
 
+from app.api.v1.auth import get_current_user
 from app.core.database import get_session
 from app.models import Organization, OrgStatus, MonthlySnapshot, Alert, AlertStatus
 
-router = APIRouter(prefix="/dashboard", tags=["dashboard"])
+router = APIRouter(
+    prefix="/dashboard",
+    tags=["dashboard"],
+    dependencies=[Depends(get_current_user)],
+)
 
 
 @router.get("/summary")
