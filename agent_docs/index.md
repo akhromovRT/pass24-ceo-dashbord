@@ -17,10 +17,13 @@
 - Аналитика поступлений: `~/Library/Mobile Documents/com~apple~CloudDocs/ClaudeCode/Аналитика поступлений/Аналитика_поступлений_2025_2026.xlsx`
 
 ## Деплой
-- Сервер: Timeweb VPS 85.239.51.34
+- Сервер: Timeweb VPS 85.239.51.34 (Ubuntu 24.04, обычный VPS — не managed)
 - Стек: Docker Compose (PostgreSQL + FastAPI + Vue/Nginx)
 - URL: http://85.239.51.34
-- Доступ: admin / Admin123! (seed user)
+- Доступ: `admin@onvi-service.ru` / пароль см. `~/.config/ceo24/credentials` (chmod 600, локально, не в репо)
+- SSH: `ssh ceo24` (alias в `~/.ssh/config`, ключ `~/.ssh/ceo24_ed25519`)
+- Compose-директория на сервере: `/root/pass24-ceo-dashbord/`
+- Runbook: `agent_docs/guides/runbook.md` (см. ниже)
 
 ## Правила и гайды
 - `agent_docs/guides/dod.md` — критерии завершенности (DoD).
