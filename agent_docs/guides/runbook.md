@@ -129,20 +129,61 @@ ssh ceo24 'docker compose -f /root/pass24-ceo-dashbord/docker-compose.yml ps; \
   echo "---last cron log---"; tail -5 /var/log/ceo24-backup.log 2>/dev/null'
 ```
 
-## Сброс пароля админа
+## Управление пользователями
 
-> **Внимание:** требует осторожности. Выполнять только при явной необходимости (например, забыт пароль).
+### Через UI (если admin может залогиниться)
+
+Зайти на http://85.239.51.34 как admin → меню «Пользователи»:
+- Создать нового пользователя (имя, email, роль) → диалог покажет сгенерированный пароль один раз
+- Сбросить пароль любому пользователю → диалог покажет новый пароль
+
+### Через CLI (если admin не может залогиниться, или для скриптов)
 
 ```bash
-# Сгенерировать новый пароль и хеш локально
-PW=$(python3 -c "import secrets, string; print(''.join(secrets.choice(string.ascii_letters+string.digits+'-_.') for _ in range(24)))")
-HASH=$(cd ~/Library/Mobile\ Documents/com~apple~CloudDocs/Cursor/@work-projects/pass24-ceo-dashbord/backend && .venv/bin/python -c "import bcrypt; print(bcrypt.hashpw('$PW'.encode(), bcrypt.gensalt()).decode())")
+# Список пользователей
+ssh ceo24 'docker exec $(docker ps -qf name=backend) python scripts/manage_users.py list'
 
-# Записать новый пароль в локальный credentials-файл
-echo "ADMIN_PASSWORD=$PW" >> ~/.config/ceo24/credentials
+# Создать пользователя
+ssh ceo24 'docker exec $(docker ps -qf name=backend) python scripts/manage_users.py create \
+    --email user@example.ru --name "Имя Фамилия" --role admin'
+# вывод: OK created: ... / PASSWORD: <сгенерированный>
 
-# Применить в БД (хеш в одинарных кавычках, чтобы bash не интерпретировал спецсимволы bcrypt)
-ssh ceo24 "docker exec -i \$(docker ps -qf name=db) psql -U ceo24 -d ceo24 -c \"UPDATE users SET hashed_password='$HASH' WHERE email='admin@onvi-service.ru';\""
+# Сбросить пароль (генерируется новый)
+ssh ceo24 'docker exec $(docker ps -qf name=backend) python scripts/manage_users.py reset-password \
+    --email user@example.ru'
+
+# Сбросить пароль с заданным значением
+ssh ceo24 'docker exec $(docker ps -qf name=backend) python scripts/manage_users.py reset-password \
+    --email user@example.ru --password "Мой_Новый_Пароль123"'
+
+# Сменить роль
+ssh ceo24 'docker exec $(docker ps -qf name=backend) python scripts/manage_users.py set-role \
+    --email user@example.ru --role manager'
+
+# Деактивировать (login перестанет работать, данные сохранятся)
+ssh ceo24 'docker exec $(docker ps -qf name=backend) python scripts/manage_users.py deactivate \
+    --email user@example.ru'
+```
+
+После любых изменений — записать новый пароль в `~/.config/ceo24/credentials` (chmod 600).
+
+### Через API (если admin может залогиниться)
+
+```bash
+TOKEN=$(curl -sS -X POST http://85.239.51.34/api/v1/auth/login \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    --data-urlencode "username=admin@example.ru" \
+    --data-urlencode "password=PASSWORD" \
+    | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+# Список
+curl -sS http://85.239.51.34/api/v1/users -H "Authorization: Bearer $TOKEN"
+
+# Сменить свой пароль
+curl -sS -X POST http://85.239.51.34/api/v1/auth/change-password \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    -d '{"current_password":"OLD","new_password":"NEW123!@"}'
 ```
 
 ## Мониторинг

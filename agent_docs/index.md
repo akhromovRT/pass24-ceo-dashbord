@@ -6,6 +6,7 @@
 - `agent_docs/architecture.md` — архитектура CEO24: компоненты, потоки данных, модель данных, стек.
 - `agent_docs/adr.md` — архитектурные решения (монолит, SQLModel, снапшоты, источники данных).
 - `agent_docs/development-history.md` — журнал итераций; смотреть последнюю запись.
+- `agent_docs/backlog.md` — список идей и рекомендаций для развития.
 
 ## Дизайн и планы
 - `docs/plans/2026-03-04-ceo24-mvp-design.md` — полный дизайн MVP: источники данных, модель, API, UI-экраны, метрики, дорожная карта.
@@ -20,7 +21,8 @@
 - Сервер: Timeweb VPS 85.239.51.34 (Ubuntu 24.04, обычный VPS — не managed)
 - Стек: Docker Compose (PostgreSQL + FastAPI + Vue/Nginx)
 - URL: http://85.239.51.34
-- Доступ: `admin@onvi-service.ru` / пароль см. `~/.config/ceo24/credentials` (chmod 600, локально, не в репо)
+- Пользователи: `admin@onvi-service.ru` (технический), `akhromov@pass24online.ru` (Алексей Хромов) — оба admin. Пароли в `~/.config/ceo24/credentials` (chmod 600, локально, не в репо)
+- Управление пользователями: UI `/users` (admin-only) или CLI: `ssh ceo24 'docker exec -it $(docker ps -qf name=backend) python scripts/manage_users.py --help'`
 - SSH: `ssh ceo24` (alias в `~/.ssh/config`, ключ `~/.ssh/ceo24_ed25519`)
 - Compose-директория на сервере: `/root/pass24-ceo-dashbord/`
 - Runbook: `agent_docs/guides/runbook.md` (см. ниже)
