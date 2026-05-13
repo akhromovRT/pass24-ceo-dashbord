@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import api from '../api/client'
 import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
@@ -33,8 +33,20 @@ const roleOptions = [
   { label: 'Просмотр', value: 'viewer' },
 ]
 const createResult = ref<{ email: string; password: string } | null>(null)
+const createResultOpen = computed({
+  get: () => createResult.value !== null,
+  set: (v: boolean) => {
+    if (!v) createResult.value = null
+  },
+})
 
 const resetResult = ref<{ email: string; password: string } | null>(null)
+const resetResultOpen = computed({
+  get: () => resetResult.value !== null,
+  set: (v: boolean) => {
+    if (!v) resetResult.value = null
+  },
+})
 
 async function load() {
   loading.value = true
@@ -61,6 +73,7 @@ async function submitCreate() {
     newName.value = ''
     newEmail.value = ''
     newRole.value = 'viewer'
+    createOpen.value = false
     await load()
   } catch (e: any) {
     errorMsg.value = e.response?.data?.detail || 'Ошибка создания'
@@ -138,7 +151,7 @@ onMounted(load)
       </div>
     </Dialog>
 
-    <Dialog v-model:visible="createResult" header="Пользователь создан" modal :style="{ width: '460px' }" :closable="true" @hide="createResult = null">
+    <Dialog v-model:visible="createResultOpen" header="Пользователь создан" modal :style="{ width: '460px' }" :closable="true">
       <div class="result-block" v-if="createResult">
         <p>Email: <b>{{ createResult.email }}</b></p>
         <p>Сгенерированный пароль (покажу один раз — сохраните):</p>
@@ -147,7 +160,7 @@ onMounted(load)
       </div>
     </Dialog>
 
-    <Dialog v-model:visible="resetResult" header="Пароль сброшен" modal :style="{ width: '460px' }" :closable="true" @hide="resetResult = null">
+    <Dialog v-model:visible="resetResultOpen" header="Пароль сброшен" modal :style="{ width: '460px' }" :closable="true">
       <div class="result-block" v-if="resetResult">
         <p>Email: <b>{{ resetResult.email }}</b></p>
         <p>Новый пароль:</p>
