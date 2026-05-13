@@ -3,26 +3,36 @@
 Использование внутри docker-контейнера backend:
 
     docker exec -it $(docker ps -qf name=backend) \
-        python scripts/manage_users.py list
+        python -m scripts.manage_users list
 
     docker exec -it $(docker ps -qf name=backend) \
-        python scripts/manage_users.py create --email a@b.ru --name Alex --role admin
+        python -m scripts.manage_users create --email a@b.ru --name Alex --role admin
 
     docker exec -it $(docker ps -qf name=backend) \
-        python scripts/manage_users.py reset-password --email a@b.ru
+        python -m scripts.manage_users reset-password --email a@b.ru
 
     docker exec -it $(docker ps -qf name=backend) \
-        python scripts/manage_users.py set-role --email a@b.ru --role manager
+        python -m scripts.manage_users set-role --email a@b.ru --role manager
 
     docker exec -it $(docker ps -qf name=backend) \
-        python scripts/manage_users.py deactivate --email a@b.ru
+        python -m scripts.manage_users deactivate --email a@b.ru
+
+Запуск через `python scripts/manage_users.py ...` тоже поддерживается —
+PYTHONPATH добавляется автоматически.
 """
 from __future__ import annotations
+
+import os
+import sys
+
+# Make `app` importable when this script is invoked as a file (e.g. /app/scripts/manage_users.py).
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
 import argparse
 import secrets
 import string
-import sys
 
 from sqlmodel import Session, select
 
