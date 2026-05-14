@@ -1,16 +1,9 @@
 """CEO24 — однострочный аудит и очистка дубликатов в БД.
 
-Цели:
-  1) Слить организации с одинаковым нормализованным ИНН (например leading-0)
-  2) Удалить дубль-Documents по (contract_id, doc_number, doc_date, amount, doc_type) — оставляем самый ранний
-  3) Удалить дубль-ClientObjects по (organization_id, LOWER(name)) — оставляем самый ранний
-
 Запуск (внутри backend-контейнера):
-    python -m scripts.dedupe_db --audit       # только показать, ничего не менять
-    python -m scripts.dedupe_db --apply       # реально удалить дубликаты
-
-Дополнительные опции:
-    --skip-merge   — не сливать организации (полезно если хотите проверять руками)
+    python -m scripts.dedupe_db --audit       # только показать
+    python -m scripts.dedupe_db --apply       # реально применить
+    [--skip-merge]                            # не сливать org-дубли
 """
 from __future__ import annotations
 
@@ -58,53 +51,48 @@ def audit(session: Session) -> dict:
 
 
 def merge_orgs_by_trimmed_inn(session: Session) -> int:
-    """Сливает пары организаций где один INN имеет leading-0, другой — нет.
-    Канонический — тот, чей ИНН валидной длины (10 или 12)."""
     pairs = session.exec(text("""
-        SELECT TRIM(LEADING '0' FROM TRIM(inn)) AS trimmed, ARRAY_AGG(id::text ORDER BY LENGTH(inn) DESC) AS ids
-        FROM organizations
-        GROUP BY trimmed
-        HAVING COUNT(*) > 1
+        SELECT TRIM(LEADING '0' FROM TRIM(inn)) AS trimmed,
+               ARRAY_AGG(id::text ORDER BY LENGTH(inn) DESC) AS ids
+        FROM organizations GROUP BY trimmed HAVING COUNT(*) > 1
     """)).all()
 
     merged = 0
     for trimmed, ids in pairs:
-        # First id has the longer (more digits) INN — likely canonical (with leading 0)
         canonical_id, *dup_ids = ids
-        canonical = session.exec(text("SELECT id, inn, monthly_ap, total_debt, in_registry FROM organizations WHERE id = :i").bindparams(i=canonical_id)).one()
+        canonical = session.exec(text(
+            "SELECT id, inn, monthly_ap, total_debt, in_registry FROM organizations WHERE id = CAST(:i AS uuid)"
+        ).bindparams(i=canonical_id)).one()
         for dup_id in dup_ids:
-            dup = session.exec(text("SELECT id, inn, monthly_ap, total_debt, in_registry FROM organizations WHERE id = :i").bindparams(i=dup_id)).one()
+            dup = session.exec(text(
+                "SELECT id, inn, monthly_ap, total_debt, in_registry FROM organizations WHERE id = CAST(:i AS uuid)"
+            ).bindparams(i=dup_id)).one()
             print(f"  merging org {dup.inn} -> {canonical.inn} (id {dup_id} -> {canonical_id})")
-            # Migrate FK references
-            session.exec(text("UPDATE contracts SET organization_id = :c WHERE organization_id = :d")
-                         .bindparams(c=canonical_id, d=dup_id))
-            session.exec(text("UPDATE documents SET organization_id = :c WHERE organization_id = :d")
-                         .bindparams(c=canonical_id, d=dup_id))
-            session.exec(text("UPDATE monthly_snapshots SET organization_id = :c WHERE organization_id = :d")
-                         .bindparams(c=canonical_id, d=dup_id))
-            session.exec(text("UPDATE alerts SET organization_id = :c WHERE organization_id = :d")
-                         .bindparams(c=canonical_id, d=dup_id))
-            session.exec(text("UPDATE client_objects SET organization_id = :c WHERE organization_id = :d")
-                         .bindparams(c=canonical_id, d=dup_id))
-            # Copy non-empty financial fields if canonical missing them
+            for table in ("contracts", "documents", "monthly_snapshots", "alerts", "client_objects"):
+                session.exec(text(
+                    f"UPDATE {table} SET organization_id = CAST(:c AS uuid) WHERE organization_id = CAST(:d AS uuid)"
+                ).bindparams(c=canonical_id, d=dup_id))
             if canonical.monthly_ap is None and dup.monthly_ap is not None:
-                session.exec(text("UPDATE organizations SET monthly_ap = :v WHERE id = :i")
-                             .bindparams(v=dup.monthly_ap, i=canonical_id))
+                session.exec(text(
+                    "UPDATE organizations SET monthly_ap = :v WHERE id = CAST(:i AS uuid)"
+                ).bindparams(v=dup.monthly_ap, i=canonical_id))
             if (canonical.total_debt is None or canonical.total_debt == 0) and dup.total_debt is not None:
-                session.exec(text("UPDATE organizations SET total_debt = :v WHERE id = :i")
-                             .bindparams(v=dup.total_debt, i=canonical_id))
+                session.exec(text(
+                    "UPDATE organizations SET total_debt = :v WHERE id = CAST(:i AS uuid)"
+                ).bindparams(v=dup.total_debt, i=canonical_id))
             if not canonical.in_registry and dup.in_registry:
-                session.exec(text("UPDATE organizations SET in_registry = TRUE WHERE id = :i")
-                             .bindparams(i=canonical_id))
-            # Delete the duplicate org
-            session.exec(text("DELETE FROM organizations WHERE id = :i").bindparams(i=dup_id))
+                session.exec(text(
+                    "UPDATE organizations SET in_registry = TRUE WHERE id = CAST(:i AS uuid)"
+                ).bindparams(i=canonical_id))
+            session.exec(text(
+                "DELETE FROM organizations WHERE id = CAST(:i AS uuid)"
+            ).bindparams(i=dup_id))
             merged += 1
     session.commit()
     return merged
 
 
 def dedupe_documents(session: Session) -> int:
-    """Удаляет дубль-Documents, оставляя самый ранний (created_at ASC) на каждую группу."""
     result = session.exec(text("""
         WITH ranked AS (
           SELECT id, ROW_NUMBER() OVER (
@@ -134,9 +122,9 @@ def dedupe_client_objects(session: Session) -> int:
 
 def main() -> int:
     p = argparse.ArgumentParser()
-    p.add_argument("--audit", action="store_true", help="Show only, do not modify")
-    p.add_argument("--apply", action="store_true", help="Apply cleanup")
-    p.add_argument("--skip-merge", action="store_true", help="Don't merge org duplicates")
+    p.add_argument("--audit", action="store_true")
+    p.add_argument("--apply", action="store_true")
+    p.add_argument("--skip-merge", action="store_true")
     args = p.parse_args()
 
     if not args.audit and not args.apply:
@@ -145,8 +133,7 @@ def main() -> int:
 
     with Session(engine) as session:
         print("=== BEFORE ===")
-        before = audit(session)
-        for k, v in before.items():
+        for k, v in audit(session).items():
             print(f"  {k:30s} {v}")
 
         if args.audit:
@@ -154,20 +141,16 @@ def main() -> int:
 
         if not args.skip_merge:
             print("\n=== Merging organizations ===")
-            merged = merge_orgs_by_trimmed_inn(session)
-            print(f"  merged: {merged}")
+            print(f"  merged: {merge_orgs_by_trimmed_inn(session)}")
 
         print("\n=== Dedup documents ===")
-        d = dedupe_documents(session)
-        print(f"  deleted: {d}")
+        print(f"  deleted: {dedupe_documents(session)}")
 
         print("\n=== Dedup client_objects ===")
-        c = dedupe_client_objects(session)
-        print(f"  deleted: {c}")
+        print(f"  deleted: {dedupe_client_objects(session)}")
 
         print("\n=== AFTER ===")
-        after = audit(session)
-        for k, v in after.items():
+        for k, v in audit(session).items():
             print(f"  {k:30s} {v}")
     return 0
 
