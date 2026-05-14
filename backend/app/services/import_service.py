@@ -320,3 +320,130 @@ class ImportService:
         self.session.add(contract)
         self.session.flush()
         return contract
+
+    # ---- Registry (Клиентская база) import ----
+
+    def process_registry_import(
+        self,
+        result,  # RegistryParseResult
+        file_hash: str,
+    ):
+        """Импорт реестра «Клиентская база»: для каждой компании по ИНН
+        проставляем in_registry=True и переносим/обогащаем поля. Объекты
+        складываем в client_objects (multi-object support)."""
+        from app.models import ClientObject
+
+        self._new_buyers = 0
+
+        import_run = ImportRun(
+            filename=result.filename,
+            file_hash=file_hash,
+            status=ImportStatus.PROCESSING,
+            total_rows=result.total_rows,
+        )
+        self.session.add(import_run)
+        self.session.flush()
+
+        orgs_marked = 0
+        orgs_created = 0
+        objects_added = 0
+        objects_updated = 0
+        for comp in result.companies:
+            org = self.session.exec(
+                select(Organization).where(Organization.inn == comp.inn)
+            ).first()
+            if org is None:
+                org = Organization(
+                    inn=comp.inn,
+                    name_1c=_clean_name(comp.company_name)[:255],
+                    status=OrgStatus.PROSPECT,
+                )
+                self.session.add(org)
+                self.session.flush()
+                self._new_buyers += 1
+                orgs_created += 1
+                self.session.add(Alert(
+                    organization_id=org.id,
+                    alert_type=AlertType.UNASSIGNED_CLIENT,
+                    severity=AlertSeverity.WARNING,
+                    title=f"Новый клиент из реестра: {comp.company_name}",
+                ))
+
+            # Mark in registry + transfer org-level fields
+            org.in_registry = True
+            if comp.contract_1c:
+                org.contract_1c_raw = comp.contract_1c
+            if comp.active_doc:
+                org.active_doc_raw = comp.active_doc
+            if comp.objects_count_declared is not None:
+                org.objects_count_declared = comp.objects_count_declared
+
+            # For back-compat with existing UI fields (single-object snapshot)
+            if comp.objects:
+                first = comp.objects[0]
+                if first.cloud_url and not org.cloud_url:
+                    org.cloud_url = first.cloud_url
+                if first.object_number and not org.system_number:
+                    org.system_number = first.object_number
+                if first.object_type and not org.object_type:
+                    org.object_type = first.object_type
+                if first.address and not org.address:
+                    org.address = first.address
+                if first.city_region and not org.city_region:
+                    org.city_region = first.city_region
+
+            org.updated_at = datetime.now(UTC)
+            self.session.add(org)
+            self.session.flush()
+            orgs_marked += 1
+
+            # Sync ClientObject rows: upsert by (organization_id, name)
+            existing_objects = {
+                o.name: o for o in self.session.exec(
+                    select(ClientObject).where(ClientObject.organization_id == org.id)
+                ).all()
+            }
+            for parsed_obj in comp.objects:
+                obj = existing_objects.get(parsed_obj.name)
+                if obj is None:
+                    obj = ClientObject(
+                        organization_id=org.id,
+                        name=parsed_obj.name[:255],
+                        cloud_url=parsed_obj.cloud_url,
+                        object_number=parsed_obj.object_number,
+                        object_type=parsed_obj.object_type,
+                        address=parsed_obj.address,
+                        city_region=parsed_obj.city_region,
+                    )
+                    self.session.add(obj)
+                    objects_added += 1
+                else:
+                    changed = False
+                    for attr in ("cloud_url", "object_number", "object_type", "address", "city_region"):
+                        new_val = getattr(parsed_obj, attr)
+                        if new_val and getattr(obj, attr) != new_val:
+                            setattr(obj, attr, new_val)
+                            changed = True
+                    if changed:
+                        obj.updated_at = datetime.now(UTC)
+                        self.session.add(obj)
+                        objects_updated += 1
+
+        import_run.buyers_count = orgs_marked
+        import_run.contracts_count = 0
+        import_run.documents_count = objects_added + objects_updated
+        import_run.new_buyers = orgs_created
+        import_run.errors = result.skipped_no_inn or None
+        import_run.delta_summary = {
+            "source": "registry",
+            "orgs_marked_in_registry": orgs_marked,
+            "orgs_created": orgs_created,
+            "objects_added": objects_added,
+            "objects_updated": objects_updated,
+            "skipped_no_inn": len(result.skipped_no_inn),
+        }
+        import_run.status = ImportStatus.COMPLETED
+        import_run.completed_at = datetime.now(UTC)
+        self.session.add(import_run)
+        self.session.commit()
+        return import_run

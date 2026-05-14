@@ -49,5 +49,10 @@ class Organization(SQLModel, table=True):
     monthly_ap: Decimal | None = Field(default=None, max_digits=12, decimal_places=2)
     total_debt: Decimal | None = Field(default=None, max_digits=12, decimal_places=2)
     notes: str | None = None
+    # Поля из реестра «Клиентская база»
+    in_registry: bool = Field(default=False, index=True)
+    contract_1c_raw: str | None = None
+    active_doc_raw: str | None = None
+    objects_count_declared: int | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

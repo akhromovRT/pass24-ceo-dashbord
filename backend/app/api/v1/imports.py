@@ -11,6 +11,7 @@ from app.core.database import get_session
 from app.models import ImportRun
 from app.parser.bank_statement import parse_bank_statement
 from app.parser.debt_report import parse_debt_report
+from app.parser.registry import parse_registry
 from app.services.import_service import ImportService
 
 router = APIRouter(
@@ -23,7 +24,7 @@ router = APIRouter(
 @router.post("/upload")
 def upload_file(
     file: UploadFile,
-    source_type: Literal["debt", "bank"] = Query(default="debt"),
+    source_type: Literal["debt", "bank", "registry"] = Query(default="debt"),
     session: Session = Depends(get_session),
 ):
     if not file.filename or not file.filename.endswith((".xls", ".xlsx")):
@@ -32,7 +33,6 @@ def upload_file(
     content = file.file.read()
     file_hash = hashlib.sha256(content).hexdigest()
 
-    # Раннее обнаружение дублей по хешу
     existing = session.exec(
         select(ImportRun).where(ImportRun.file_hash == file_hash)
     ).first()
@@ -61,6 +61,13 @@ def upload_file(
                 raise HTTPException(status_code=422, detail=f"Parse error: {e}")
             bank_result.filename = file.filename
             import_run = svc.process_bank_import(bank_result, file_hash=file_hash)
+        elif source_type == "registry":
+            try:
+                reg_result = parse_registry(tmp_path)
+            except ValueError as e:
+                raise HTTPException(status_code=422, detail=f"Parse error: {e}")
+            reg_result.filename = file.filename
+            import_run = svc.process_registry_import(reg_result, file_hash=file_hash)
         else:
             raise HTTPException(status_code=400, detail=f"Unknown source_type: {source_type}")
     finally:
