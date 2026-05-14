@@ -20,6 +20,7 @@ def list_debtors(
     query = (
         select(Organization)
         .where(
+            Organization.excluded_from_analytics == False,  # noqa: E712
             Organization.total_debt.is_not(None),  # type: ignore[union-attr]
             Organization.total_debt > min_debt,  # type: ignore[operator]
         )

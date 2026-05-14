@@ -55,5 +55,7 @@ class Organization(SQLModel, table=True):
     active_doc_raw: str | None = None
     objects_count_declared: int | None = None
     doc_exchange: str | None = None  # ЭДО / На бумаге / Площадка / None
+    excluded_from_analytics: bool = Field(default=False, index=True)
+    excluded_reason: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
