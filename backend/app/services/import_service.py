@@ -1,7 +1,7 @@
 import re
 from datetime import UTC, datetime
-from decimal import Decimal
 
+from sqlalchemy import func
 from sqlmodel import Session, select
 
 from app.models import (
@@ -43,13 +43,67 @@ def _normalize_inn(inn: str) -> str:
     return s
 
 
+def _doc_key(contract_id, doc_type, doc_date, doc_number, amount):
+    """Канонический ключ для дедупликации Document.
+    Сумма нормализуется до 2 знаков после запятой, чтобы Decimal('7000')
+    и Decimal('7000.00') давали один и тот же ключ."""
+    from decimal import Decimal as _D
+    try:
+        amt = _D(str(amount or 0))
+    except Exception:
+        amt = _D(0)
+    return (
+        str(contract_id),
+        str(doc_type.value if hasattr(doc_type, "value") else doc_type),
+        str(doc_date) if doc_date else "",
+        (doc_number or "").strip(),
+        f"{amt:.2f}",
+    )
+
+
 class ImportService:
     def __init__(self, session: Session):
         self.session = session
         self._new_buyers = 0
+        # Cache existing document keys per contract — populated lazily
+        self._doc_keys_cache: dict = {}
+        self._skipped_dup_documents = 0
+
+    # ---- Document dedup helper ----
+
+    def _existing_doc_keys(self, contract_id) -> set:
+        """Возвращает set ключей существующих Document для контракта.
+        Кешируется по contract_id (BLOB queries × 1, не × N документов)."""
+        if contract_id not in self._doc_keys_cache:
+            rows = self.session.exec(
+                select(Document.doc_type, Document.doc_date,
+                       Document.doc_number, Document.amount)
+                .where(Document.contract_id == contract_id)
+            ).all()
+            self._doc_keys_cache[contract_id] = {
+                _doc_key(contract_id, dt, dd, dn, am)
+                for dt, dd, dn, am in rows
+            }
+        return self._doc_keys_cache[contract_id]
+
+    def _add_document(self, doc: Document) -> bool:
+        """Идемпотентная вставка Document. True если добавлен, False если дубль."""
+        key = _doc_key(doc.contract_id, doc.doc_type, doc.doc_date,
+                       doc.doc_number, doc.amount)
+        keys = self._existing_doc_keys(doc.contract_id)
+        if key in keys:
+            self._skipped_dup_documents += 1
+            return False
+        self.session.add(doc)
+        keys.add(key)
+        return True
+
+    # ---- Debt-report import ----
 
     def process_import(self, parse_result: ParseResult) -> ImportRun:
         self._new_buyers = 0
+        self._skipped_dup_documents = 0
+        self._doc_keys_cache = {}
 
         import_run = ImportRun(
             filename=parse_result.filename,
@@ -71,13 +125,17 @@ class ImportService:
                 contract = self._process_contract(parsed_contract, org, import_run)
                 contracts_count += 1
                 for parsed_doc in parsed_contract.documents:
-                    self._process_document(parsed_doc, contract, org, import_run)
-                    documents_count += 1
+                    if self._process_document(parsed_doc, contract, org, import_run):
+                        documents_count += 1
 
         import_run.buyers_count = len(parse_result.buyers)
         import_run.contracts_count = contracts_count
         import_run.documents_count = documents_count
         import_run.new_buyers = self._new_buyers
+        import_run.delta_summary = {
+            "source": "debt_report",
+            "skipped_duplicate_documents": self._skipped_dup_documents,
+        }
         import_run.status = ImportStatus.COMPLETED
         import_run.completed_at = datetime.now(UTC)
 
@@ -86,14 +144,15 @@ class ImportService:
         return import_run
 
     def _process_buyer(self, buyer: ParsedBuyer, import_run: ImportRun) -> Organization:
+        normalized_inn = _normalize_inn(buyer.inn)
         org = self.session.exec(
-            select(Organization).where(Organization.inn == buyer.inn)
+            select(Organization).where(Organization.inn == normalized_inn)
         ).first()
 
         if org is None:
             cleaned_name = _clean_name(buyer.name)
             org = Organization(
-                inn=buyer.inn,
+                inn=normalized_inn,
                 name_1c=cleaned_name,
                 total_debt=buyer.debt_end,
             )
@@ -101,13 +160,12 @@ class ImportService:
             self.session.flush()
             self._new_buyers += 1
 
-            alert = Alert(
+            self.session.add(Alert(
                 organization_id=org.id,
                 alert_type=AlertType.UNASSIGNED_CLIENT,
                 severity=AlertSeverity.WARNING,
                 title=f"Новый клиент без менеджера: {cleaned_name}",
-            )
-            self.session.add(alert)
+            ))
         else:
             org.total_debt = buyer.debt_end
             self.session.add(org)
@@ -150,8 +208,9 @@ class ImportService:
         contract: Contract,
         org: Organization,
         import_run: ImportRun,
-    ) -> Document:
+    ) -> bool:
         doc_type = _DOC_TYPE_MAP.get(parsed.doc_type, DocType.SALE)
+        amount = parsed.amount or parsed.sold or parsed.paid or 0
 
         doc = Document(
             contract_id=contract.id,
@@ -159,12 +218,11 @@ class ImportService:
             doc_type=doc_type,
             doc_number=parsed.doc_number,
             doc_date=parsed.doc_date,
-            amount=parsed.amount or parsed.sold or parsed.paid or 0,
+            amount=amount,
             import_run_id=import_run.id,
             raw_name=parsed.raw_name,
         )
-        self.session.add(doc)
-        return doc
+        return self._add_document(doc)
 
     # ---- Bank statement import ----
 
@@ -173,15 +231,10 @@ class ImportService:
         bank_result: BankStatementResult,
         file_hash: str,
     ) -> ImportRun:
-        """Импорт банковской выписки: каждый платёж — Document(doc_type=PAYMENT).
-        Привязка к Organization по нормализованному ИНН. Если организации нет —
-        создаём со status=PROSPECT. Каждой организации заводится синтетический
-        контракт BANK-IMPORT, если он не существует — туда привязываются все
-        bank-импорт документы (не путать с реальными контрактами из 1С)."""
-
         self._new_buyers = 0
+        self._skipped_dup_documents = 0
+        self._doc_keys_cache = {}
 
-        # Период
         period_dates = [p.date for p in bank_result.payments]
         period_start = min(period_dates) if period_dates else None
         period_end = max(period_dates) if period_dates else None
@@ -215,7 +268,6 @@ class ImportService:
                     "counterparty": p.counterparty,
                 })
                 continue
-            # Sanity check: INN length must be 10 or 12
             if len(inn) not in (10, 12):
                 errors.append({
                     "type": "invalid_inn_length",
@@ -246,8 +298,8 @@ class ImportService:
                 import_run_id=import_run.id,
                 raw_name=(p.description or "")[:500],
             )
-            self.session.add(doc)
-            documents_count += 1
+            if self._add_document(doc):
+                documents_count += 1
 
         import_run.buyers_count = len(seen_orgs)
         import_run.contracts_count = contracts_count
@@ -261,6 +313,7 @@ class ImportService:
             "period_raw": bank_result.period,
             "total_payments": len(bank_result.payments),
             "skipped_no_inn": skipped_no_inn,
+            "skipped_duplicate_documents": self._skipped_dup_documents,
         }
         import_run.status = ImportStatus.COMPLETED
         import_run.completed_at = datetime.now(UTC)
@@ -276,7 +329,6 @@ class ImportService:
             return org
 
         name = (p.counterparty or "").strip()
-        # Bank counterparty часто содержит "Р/С..." после имени — отсекаем
         name = re.split(r"\s+Р/С\s+", name, maxsplit=1)[0].strip()
         name = name[:255] or f"Компания ИНН {inn}"
 
@@ -289,13 +341,12 @@ class ImportService:
         self.session.flush()
         self._new_buyers += 1
 
-        alert = Alert(
+        self.session.add(Alert(
             organization_id=org.id,
             alert_type=AlertType.UNASSIGNED_CLIENT,
             severity=AlertSeverity.WARNING,
             title=f"Новый клиент из банк-выписки: {name}",
-        )
-        self.session.add(alert)
+        ))
         return org
 
     def _get_or_create_bank_contract(self, org: Organization) -> Contract:
@@ -328,9 +379,10 @@ class ImportService:
         result,  # RegistryParseResult
         file_hash: str,
     ):
-        """Импорт реестра «Клиентская база»: для каждой компании по ИНН
-        проставляем in_registry=True и переносим/обогащаем поля. Объекты
-        складываем в client_objects (multi-object support)."""
+        """Импорт реестра. Идемпотентен: повторный импорт того же файла даст
+        409 по file_hash. ClientObject upsert делается по case-insensitive
+        ключу (organization_id, LOWER(name)) — поэтому даже при изменении
+        регистра букв дубль не создастся."""
         from app.models import ClientObject
 
         self._new_buyers = 0
@@ -348,13 +400,16 @@ class ImportService:
         orgs_created = 0
         objects_added = 0
         objects_updated = 0
+        objects_dedup_skipped = 0
+
         for comp in result.companies:
+            inn = _normalize_inn(comp.inn)
             org = self.session.exec(
-                select(Organization).where(Organization.inn == comp.inn)
+                select(Organization).where(Organization.inn == inn)
             ).first()
             if org is None:
                 org = Organization(
-                    inn=comp.inn,
+                    inn=inn,
                     name_1c=_clean_name(comp.company_name)[:255],
                     status=OrgStatus.PROSPECT,
                 )
@@ -369,7 +424,6 @@ class ImportService:
                     title=f"Новый клиент из реестра: {comp.company_name}",
                 ))
 
-            # Mark in registry + transfer org-level fields
             org.in_registry = True
             if comp.contract_1c:
                 org.contract_1c_raw = comp.contract_1c
@@ -380,7 +434,6 @@ class ImportService:
             if comp.doc_exchange:
                 org.doc_exchange = comp.doc_exchange
 
-            # For back-compat with existing UI fields (single-object snapshot)
             if comp.objects:
                 first = comp.objects[0]
                 if first.cloud_url and not org.cloud_url:
@@ -399,14 +452,21 @@ class ImportService:
             self.session.flush()
             orgs_marked += 1
 
-            # Sync ClientObject rows: upsert by (organization_id, name)
-            existing_objects = {
-                o.name: o for o in self.session.exec(
-                    select(ClientObject).where(ClientObject.organization_id == org.id)
-                ).all()
-            }
+            # Upsert ClientObject by case-insensitive name
+            existing_by_lname: dict = {}
+            for o in self.session.exec(
+                select(ClientObject).where(ClientObject.organization_id == org.id)
+            ).all():
+                key = o.name.strip().lower()
+                if key in existing_by_lname:
+                    # In-DB duplicate detected — keep first, will be cleaned up by dedupe script
+                    objects_dedup_skipped += 1
+                    continue
+                existing_by_lname[key] = o
+
             for parsed_obj in comp.objects:
-                obj = existing_objects.get(parsed_obj.name)
+                key = parsed_obj.name.strip().lower()
+                obj = existing_by_lname.get(key)
                 if obj is None:
                     obj = ClientObject(
                         organization_id=org.id,
@@ -418,6 +478,7 @@ class ImportService:
                         city_region=parsed_obj.city_region,
                     )
                     self.session.add(obj)
+                    existing_by_lname[key] = obj
                     objects_added += 1
                 else:
                     changed = False
@@ -442,6 +503,7 @@ class ImportService:
             "orgs_created": orgs_created,
             "objects_added": objects_added,
             "objects_updated": objects_updated,
+            "objects_dedup_skipped_in_db": objects_dedup_skipped,
             "skipped_no_inn": len(result.skipped_no_inn),
         }
         import_run.status = ImportStatus.COMPLETED
