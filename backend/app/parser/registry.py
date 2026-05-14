@@ -31,6 +31,7 @@ _COL = {
     "object_type": 10,
     "address": 11,
     "city_region": 12,
+    "doc_exchange": 13,
 }
 
 
@@ -51,6 +52,7 @@ class ParsedRegistryCompany:
     contract_1c: str | None = None
     active_doc: str | None = None
     objects_count_declared: int | None = None
+    doc_exchange: str | None = None
     objects: list[ParsedRegistryObject] = field(default_factory=list)
 
 
@@ -149,6 +151,7 @@ def parse_registry(file_path: str | Path) -> RegistryParseResult:
                 contract_1c=_clean(ws.cell(row=r, column=_COL["contract_1c"]).value),
                 active_doc=_clean(ws.cell(row=r, column=_COL["active_doc"]).value),
                 objects_count_declared=objects_count_int,
+                doc_exchange=_clean(ws.cell(row=r, column=_COL["doc_exchange"]).value),
             )
             by_inn[inn] = comp
 

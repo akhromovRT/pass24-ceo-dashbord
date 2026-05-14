@@ -377,6 +377,8 @@ class ImportService:
                 org.active_doc_raw = comp.active_doc
             if comp.objects_count_declared is not None:
                 org.objects_count_declared = comp.objects_count_declared
+            if comp.doc_exchange:
+                org.doc_exchange = comp.doc_exchange
 
             # For back-compat with existing UI fields (single-object snapshot)
             if comp.objects:
