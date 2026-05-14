@@ -5,7 +5,13 @@ from sqlmodel import Session, select, func, col
 
 from app.api.v1.auth import get_current_user
 from app.core.database import get_session
-from app.models import Organization, Contract, MonthlySnapshot, OrgStatus
+from app.models import (
+    ClientObject,
+    Contract,
+    MonthlySnapshot,
+    Organization,
+    OrgStatus,
+)
 
 router = APIRouter(
     prefix="/organizations",
@@ -85,3 +91,18 @@ def get_organization_contracts(inn: str, session: Session = Depends(get_session)
         select(Contract).where(Contract.organization_id == org.id)
     ).all()
     return contracts
+
+
+@router.get("/{inn}/objects")
+def get_organization_objects(inn: str, session: Session = Depends(get_session)):
+    org = session.exec(
+        select(Organization).where(Organization.inn == inn)
+    ).first()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    objects = session.exec(
+        select(ClientObject)
+        .where(ClientObject.organization_id == org.id)
+        .order_by(ClientObject.name)
+    ).all()
+    return objects

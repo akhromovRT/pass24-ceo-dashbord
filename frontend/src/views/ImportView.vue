@@ -5,12 +5,32 @@ import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
 import Tag from 'primevue/tag'
 import Message from 'primevue/message'
+import Select from 'primevue/select'
 import api from '../api/client'
+
+const SOURCE_TYPES = [
+  {
+    value: 'debt',
+    label: 'Задолженность покупателей (1С)',
+    hint: 'Полный отчёт из 1С: организации, договоры, реализации, оплаты, остатки.',
+  },
+  {
+    value: 'bank',
+    label: 'Банковская выписка',
+    hint: 'Платежи как Document(type=PAYMENT). Новые ИНН → PROSPECT-карточки.',
+  },
+  {
+    value: 'registry',
+    label: 'Клиентская база (реестр)',
+    hint: 'Проставляет «В реестре = Да», переносит договор/доп.документ/объекты.',
+  },
+]
 
 const runs = ref<any[]>([])
 const uploadResult = ref<any>(null)
 const uploadError = ref('')
 const loading = ref(false)
+const sourceType = ref<'debt' | 'bank' | 'registry'>('debt')
 
 async function loadRuns() {
   const res = await api.get('/import/runs')
@@ -29,7 +49,7 @@ async function onUpload(event: any) {
   formData.append('file', file)
 
   try {
-    const res = await api.post('/import/upload', formData)
+    const res = await api.post(`/import/upload?source_type=${sourceType.value}`, formData)
     uploadResult.value = res.data
     await loadRuns()
   } catch (e: any) {
@@ -39,12 +59,12 @@ async function onUpload(event: any) {
   }
 }
 
-function statusSeverity(status: string): "success" | "danger" | "warn" | "info" | undefined {
+function statusSeverity(status: string): 'success' | 'danger' | 'warn' | 'info' | undefined {
   switch (status) {
     case 'completed': return 'success'
-    case 'failed': return 'danger'
-    case 'processing': return 'warn'
-    default: return 'info'
+    case 'failed':    return 'danger'
+    case 'processing':return 'warn'
+    default:          return 'info'
   }
 }
 
@@ -52,22 +72,52 @@ function formatDate(dt: string) {
   if (!dt) return '—'
   return new Date(dt).toLocaleString('ru-RU')
 }
+
+function sourceFromRun(run: any): string {
+  const ds = run?.delta_summary
+  if (ds?.source === 'bank_statement') return 'Банк'
+  if (ds?.source === 'registry') return 'Реестр'
+  return '1С (задолженность)'
+}
+
+function sourceSeverity(label: string): 'info' | 'success' | 'warn' {
+  if (label === 'Банк') return 'success'
+  if (label === 'Реестр') return 'warn'
+  return 'info'
+}
 </script>
 
 <template>
   <div class="import-view">
     <h1>Импорт данных</h1>
 
-    <div class="upload-section">
-      <FileUpload
-        mode="basic"
-        accept=".xls,.xlsx"
-        :maxFileSize="10000000"
-        chooseLabel="Выбрать файл XLS/XLSX"
-        :auto="true"
-        customUpload
-        @uploader="onUpload"
-      />
+    <div class="upload-controls">
+      <div class="control">
+        <label>Тип файла</label>
+        <Select
+          v-model="sourceType"
+          :options="SOURCE_TYPES"
+          option-label="label"
+          option-value="value"
+          style="width: 360px"
+        />
+        <div class="hint">
+          {{ SOURCE_TYPES.find(s => s.value === sourceType)?.hint }}
+        </div>
+      </div>
+
+      <div class="control">
+        <label>Файл</label>
+        <FileUpload
+          mode="basic"
+          accept=".xls,.xlsx"
+          :maxFileSize="10000000"
+          chooseLabel="Выбрать .xls / .xlsx"
+          :auto="true"
+          customUpload
+          @uploader="onUpload"
+        />
+      </div>
     </div>
 
     <Message v-if="uploadError" severity="error" :closable="true" @close="uploadError = ''">
@@ -76,7 +126,7 @@ function formatDate(dt: string) {
 
     <div v-if="uploadResult" class="upload-result">
       <Message severity="success" :closable="false">
-        Импорт завершён: {{ uploadResult.buyers_count }} покупателей,
+        Импорт завершён: {{ uploadResult.buyers_count }} организаций,
         {{ uploadResult.contracts_count }} контрактов,
         {{ uploadResult.documents_count }} документов.
         Новых: {{ uploadResult.new_buyers || 0 }}.
@@ -86,9 +136,14 @@ function formatDate(dt: string) {
     <h3>История импортов</h3>
     <DataTable :value="runs" stripedRows>
       <Column field="filename" header="Файл" />
+      <Column header="Источник" style="width: 130px">
+        <template #body="{ data }">
+          <Tag :severity="sourceSeverity(sourceFromRun(data))">{{ sourceFromRun(data) }}</Tag>
+        </template>
+      </Column>
       <Column header="Период">
         <template #body="{ data }">
-          {{ data.period_start }} — {{ data.period_end }}
+          {{ data.period_start || '—' }} — {{ data.period_end || '—' }}
         </template>
       </Column>
       <Column field="status" header="Статус" style="width: 120px">
@@ -96,9 +151,10 @@ function formatDate(dt: string) {
           <Tag :severity="statusSeverity(data.status)">{{ data.status }}</Tag>
         </template>
       </Column>
-      <Column field="buyers_count" header="Покупатели" style="width: 120px" />
+      <Column field="buyers_count" header="Организации" style="width: 120px" />
       <Column field="contracts_count" header="Договоры" style="width: 110px" />
       <Column field="documents_count" header="Документы" style="width: 110px" />
+      <Column field="new_buyers" header="Новых" style="width: 90px" />
       <Column header="Дата" style="width: 180px">
         <template #body="{ data }">{{ formatDate(data.started_at) }}</template>
       </Column>
@@ -123,8 +179,36 @@ function formatDate(dt: string) {
   margin: 1.5rem 0 0.75rem;
 }
 
-.upload-section {
+.upload-controls {
+  display: flex;
+  gap: 1.5rem;
+  align-items: flex-start;
   margin-bottom: 1rem;
+  padding: 1rem;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  flex-wrap: wrap;
+}
+
+.control {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.control label {
+  font-size: 0.75rem;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.hint {
+  font-size: 0.8rem;
+  color: #64748b;
+  margin-top: 0.25rem;
+  max-width: 360px;
 }
 
 .upload-result {

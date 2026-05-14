@@ -152,7 +152,9 @@ def parse_registry(file_path: str | Path) -> RegistryParseResult:
             )
             by_inn[inn] = comp
 
-        # Add object (if has a name)
+        # Add object (if has a name). Dedup within a single company by
+        # (normalized name, normalized cloud_url) — a duplicated row in the
+        # source file (same name + same cloud URL) is just paste noise.
         if object_name:
             obj = ParsedRegistryObject(
                 name=object_name,
@@ -162,6 +164,12 @@ def parse_registry(file_path: str | Path) -> RegistryParseResult:
                 address=_clean(ws.cell(row=r, column=_COL["address"]).value),
                 city_region=_clean(ws.cell(row=r, column=_COL["city_region"]).value),
             )
+            sig = (object_name.strip().lower(), (obj.cloud_url or "").strip().lower())
+            if any(
+                (o.name.strip().lower(), (o.cloud_url or "").strip().lower()) == sig
+                for o in comp.objects
+            ):
+                continue  # duplicate row in source file — skip
             comp.objects.append(obj)
 
     result.companies = list(by_inn.values())
