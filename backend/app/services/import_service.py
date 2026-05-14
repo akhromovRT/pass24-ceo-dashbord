@@ -1,15 +1,17 @@
 import re
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from sqlmodel import Session, select
 
 from app.models import (
     Alert, AlertSeverity, AlertType,
-    Contract, ContractStatus,
+    Contract, ContractStatus, ContractType,
     Document, DocType,
     ImportRun, ImportStatus,
-    Organization,
+    Organization, OrgStatus,
 )
+from app.parser.bank_statement import BankStatementResult, ParsedPayment
 from app.parser.classifier import classify_contract
 from app.parser.debt_report import ParsedBuyer, ParsedContract, ParsedDocument, ParseResult
 
@@ -23,9 +25,22 @@ _DOC_TYPE_MAP = {
     "payment": DocType.PAYMENT,
 }
 
+_BANK_SYNTH_CONTRACT_NUMBER = "BANK-IMPORT"
+
 
 def _clean_name(name: str) -> str:
     return _CLEAN_SUFFIXES.sub("", name).strip()
+
+
+def _normalize_inn(inn: str) -> str:
+    s = (inn or "").strip()
+    if not s:
+        return ""
+    if len(s) == 9:
+        return s.zfill(10)
+    if len(s) == 11:
+        return s.zfill(12)
+    return s
 
 
 class ImportService:
@@ -150,3 +165,158 @@ class ImportService:
         )
         self.session.add(doc)
         return doc
+
+    # ---- Bank statement import ----
+
+    def process_bank_import(
+        self,
+        bank_result: BankStatementResult,
+        file_hash: str,
+    ) -> ImportRun:
+        """Импорт банковской выписки: каждый платёж — Document(doc_type=PAYMENT).
+        Привязка к Organization по нормализованному ИНН. Если организации нет —
+        создаём со status=PROSPECT. Каждой организации заводится синтетический
+        контракт BANK-IMPORT, если он не существует — туда привязываются все
+        bank-импорт документы (не путать с реальными контрактами из 1С)."""
+
+        self._new_buyers = 0
+
+        # Период
+        period_dates = [p.date for p in bank_result.payments]
+        period_start = min(period_dates) if period_dates else None
+        period_end = max(period_dates) if period_dates else None
+
+        import_run = ImportRun(
+            filename=bank_result.filename,
+            file_hash=file_hash,
+            period_start=period_start,
+            period_end=period_end,
+            status=ImportStatus.PROCESSING,
+            total_rows=len(bank_result.payments),
+        )
+        self.session.add(import_run)
+        self.session.flush()
+
+        documents_count = 0
+        contracts_count = 0
+        skipped_no_inn = 0
+        errors: list[dict] = []
+        seen_orgs: set = set()
+        seen_contracts: set = set()
+
+        for p in bank_result.payments:
+            inn = _normalize_inn(p.inn)
+            if not inn:
+                skipped_no_inn += 1
+                errors.append({
+                    "type": "no_inn",
+                    "date": str(p.date),
+                    "amount": float(p.amount),
+                    "counterparty": p.counterparty,
+                })
+                continue
+            # Sanity check: INN length must be 10 or 12
+            if len(inn) not in (10, 12):
+                errors.append({
+                    "type": "invalid_inn_length",
+                    "inn": inn,
+                    "len": len(inn),
+                    "date": str(p.date),
+                    "counterparty": p.counterparty,
+                })
+                continue
+
+            org = self._find_or_create_org_from_bank(p, inn)
+            contract = self._get_or_create_bank_contract(org)
+            if org.id not in seen_orgs:
+                seen_orgs.add(org.id)
+            if contract.id not in seen_contracts:
+                seen_contracts.add(contract.id)
+                contracts_count += 1
+
+            doc = Document(
+                contract_id=contract.id,
+                organization_id=org.id,
+                doc_type=DocType.PAYMENT,
+                doc_number=p.doc_number or None,
+                doc_date=p.date,
+                amount=p.amount,
+                period_year=p.payment_info.period_year if p.payment_info else None,
+                period_month=p.payment_info.period_month if p.payment_info else None,
+                import_run_id=import_run.id,
+                raw_name=(p.description or "")[:500],
+            )
+            self.session.add(doc)
+            documents_count += 1
+
+        import_run.buyers_count = len(seen_orgs)
+        import_run.contracts_count = contracts_count
+        import_run.documents_count = documents_count
+        import_run.new_buyers = self._new_buyers
+        import_run.errors = errors or None
+        import_run.delta_summary = {
+            "source": "bank_statement",
+            "account_number": bank_result.account_number,
+            "owner": bank_result.owner,
+            "period_raw": bank_result.period,
+            "total_payments": len(bank_result.payments),
+            "skipped_no_inn": skipped_no_inn,
+        }
+        import_run.status = ImportStatus.COMPLETED
+        import_run.completed_at = datetime.now(UTC)
+        self.session.add(import_run)
+        self.session.commit()
+        return import_run
+
+    def _find_or_create_org_from_bank(self, p: ParsedPayment, inn: str) -> Organization:
+        org = self.session.exec(
+            select(Organization).where(Organization.inn == inn)
+        ).first()
+        if org is not None:
+            return org
+
+        name = (p.counterparty or "").strip()
+        # Bank counterparty часто содержит "Р/С..." после имени — отсекаем
+        name = re.split(r"\s+Р/С\s+", name, maxsplit=1)[0].strip()
+        name = name[:255] or f"Компания ИНН {inn}"
+
+        org = Organization(
+            inn=inn,
+            name_1c=name,
+            status=OrgStatus.PROSPECT,
+        )
+        self.session.add(org)
+        self.session.flush()
+        self._new_buyers += 1
+
+        alert = Alert(
+            organization_id=org.id,
+            alert_type=AlertType.UNASSIGNED_CLIENT,
+            severity=AlertSeverity.WARNING,
+            title=f"Новый клиент из банк-выписки: {name}",
+        )
+        self.session.add(alert)
+        return org
+
+    def _get_or_create_bank_contract(self, org: Organization) -> Contract:
+        existing = self.session.exec(
+            select(Contract).where(
+                Contract.organization_id == org.id,
+                Contract.contract_number == _BANK_SYNTH_CONTRACT_NUMBER,
+            )
+        ).first()
+        if existing:
+            return existing
+
+        contract = Contract(
+            organization_id=org.id,
+            contract_number=_BANK_SYNTH_CONTRACT_NUMBER,
+            contract_type=ContractType.OTHER,
+            classification_source="bank_import",
+            classification_rule="synthetic",
+            raw_name="Платежи из банк-выписки без привязки к договору 1С",
+            status=ContractStatus.ACTIVE,
+        )
+        self.session.add(contract)
+        self.session.flush()
+        return contract
