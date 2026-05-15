@@ -38,5 +38,10 @@ export const useOrganizationsStore = defineStore('organizations', () => {
     }
   }
 
-  return { items, total, loading, fetch }
+  async function updateOrganization(inn: string, patch: Record<string, unknown>) {
+    const res = await api.patch(`/organizations/${inn}`, patch)
+    return res.data
+  }
+
+  return { items, total, loading, fetch, updateOrganization }
 })
