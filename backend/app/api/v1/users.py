@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
 from sqlmodel import Session, select
 
-from app.api.v1.auth import require_admin
+from app.api.v1.auth import get_current_user, require_admin
 from app.core.database import get_session
 from app.core.security import get_password_hash
 from app.models import User, UserRole
@@ -15,7 +15,6 @@ from app.models import User, UserRole
 router = APIRouter(
     prefix="/users",
     tags=["users"],
-    dependencies=[Depends(require_admin)],
 )
 
 EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
@@ -51,13 +50,21 @@ def _serialize(user: User) -> dict:
     }
 
 
-@router.get("")
+@router.get("/options", dependencies=[Depends(get_current_user)])
+def list_user_options(session: Session = Depends(get_session)):
+    users = session.exec(
+        select(User).where(User.is_active == True)  # noqa: E712
+    ).all()
+    return [{"id": str(u.id), "name": u.name} for u in users]
+
+
+@router.get("", dependencies=[Depends(require_admin)])
 def list_users(session: Session = Depends(get_session)):
     users = session.exec(select(User).order_by(User.created_at)).all()
     return [_serialize(u) for u in users]
 
 
-@router.post("", status_code=201)
+@router.post("", status_code=201, dependencies=[Depends(require_admin)])
 def create_user(body: CreateUserRequest, session: Session = Depends(get_session)):
     existing = session.exec(select(User).where(User.email == body.email)).first()
     if existing:
@@ -86,7 +93,7 @@ class ResetPasswordResponse(BaseModel):
     new_password: str
 
 
-@router.post("/{user_id}/reset-password")
+@router.post("/{user_id}/reset-password", dependencies=[Depends(require_admin)])
 def reset_password(user_id: uuid.UUID, session: Session = Depends(get_session)):
     user = session.get(User, user_id)
     if not user:

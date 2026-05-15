@@ -153,3 +153,12 @@ class TestMe:
         body = r.json()
         assert body["email"] == "viewer@test.ru"
         assert body["role"] == "viewer"
+
+
+class TestUserOptions:
+    def test_users_options_available_to_non_admin(self, viewer_client: TestClient):
+        resp = viewer_client.get("/api/v1/users/options")
+        assert resp.status_code == 200
+        rows = resp.json()
+        assert isinstance(rows, list)
+        assert all("id" in r and "name" in r for r in rows)
