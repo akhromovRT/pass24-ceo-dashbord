@@ -1,126 +1,162 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, onMounted, ref } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import DataTable from 'primevue/datatable'
 import Column from 'primevue/column'
 import Tag from 'primevue/tag'
-import VChart from 'vue-echarts'
-import { use } from 'echarts/core'
-import { BarChart } from 'echarts/charts'
-import { GridComponent, TooltipComponent } from 'echarts/components'
-import { CanvasRenderer } from 'echarts/renderers'
+import Select from 'primevue/select'
+import { useToast } from 'primevue/usetoast'
 import api from '../api/client'
-
-use([BarChart, GridComponent, TooltipComponent, CanvasRenderer])
+import SegmentBand from '../components/SegmentBand.vue'
 
 const router = useRouter()
+const route = useRoute()
+const toast = useToast()
+
 const debtors = ref<any[]>([])
-const aging = ref<any[]>([])
 const loading = ref(true)
+const bucket = ref<string>(
+  typeof route.query.bucket === 'string' ? route.query.bucket : 'all'
+)
+
+const statusOptions = [
+  { label: 'Активен', value: 'active' },
+  { label: 'Приостановлен', value: 'suspended' },
+  { label: 'Отток', value: 'churned' },
+  { label: 'Потенциальный', value: 'prospect' },
+]
 
 onMounted(async () => {
   try {
-    const [debtorsRes, agingRes] = await Promise.all([
-      api.get('/billing/debtors'),
-      api.get('/dashboard/aging'),
-    ])
-    debtors.value = debtorsRes.data
-    aging.value = agingRes.data
+    const res = await api.get('/billing/debtors')
+    debtors.value = res.data
   } finally {
     loading.value = false
   }
 })
 
-import { computed } from 'vue'
+const BUCKETS = ['0-30', '31-60', '61-90', '90+']
 
-const agingChartOption = computed(() => {
-  const bucketOrder = ['0-30', '31-60', '61-90', '90+']
-  const colors = ['#6b7280', '#eab308', '#f97316', '#ef4444']
-  const amounts = bucketOrder.map(b => {
-    const item = aging.value.find((a: any) => a.bucket === b)
-    return item ? item.amount : 0
-  })
+const filteredRows = computed(() =>
+  bucket.value === 'all'
+    ? debtors.value
+    : debtors.value.filter(r => r.aging_bucket === bucket.value)
+)
 
-  return {
-    tooltip: {
-      trigger: 'axis',
-      formatter: (params: any) => {
-        const p = params[0]
-        return `${p.name}: ${new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(p.value)}`
-      },
-    },
-    xAxis: { type: 'value' },
-    yAxis: {
-      type: 'category',
-      data: ['90+ дней', '61-90 дней', '31-60 дней', '0-30 дней'],
-    },
-    series: [{
-      type: 'bar',
-      data: [...amounts].reverse().map((v, i) => ({
-        value: v,
-        itemStyle: { color: colors[3 - i] },
-      })),
-    }],
-  }
+const metrics = computed(() => {
+  const rows = debtors.value
+  const totalDebt = rows.reduce((s, r) => s + (r.total_debt || 0), 0)
+  const b90 = rows.filter(r => r.aging_bucket === '90+')
+  const sum90 = b90.reduce((s, r) => s + (r.total_debt || 0), 0)
+  const withMonths = rows.filter(r => r.months_overdue != null)
+  const avgMonths = withMonths.length
+    ? withMonths.reduce((s, r) => s + r.months_overdue, 0) / withMonths.length
+    : 0
+  return [
+    { label: 'Общий долг', value: fmtRub(totalDebt) },
+    { label: 'Должников', value: String(rows.length) },
+    { label: 'Просрочка 90+', value: `${b90.length} · ${fmtRub(sum90)}` },
+    { label: 'Средняя просрочка', value: `${avgMonths.toFixed(1)} мес` },
+  ]
 })
 
-function formatCurrency(value: number | null) {
+const segments = computed(() => [
+  { key: 'all', label: 'Все', count: debtors.value.length },
+  ...BUCKETS.map(b => ({
+    key: b,
+    label: b,
+    count: debtors.value.filter(r => r.aging_bucket === b).length,
+  })),
+])
+
+function fmtRub(value: number | null) {
   if (value == null) return '—'
-  return new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(value)
+  return new Intl.NumberFormat('ru-RU', {
+    style: 'currency', currency: 'RUB', maximumFractionDigits: 0,
+  }).format(value)
 }
 
-function debtSeverity(value: number | null): "danger" | "warn" | "secondary" | undefined {
-  if (!value || value <= 0) return 'secondary'
-  if (value > 100000) return 'danger'
-  if (value > 30000) return 'warn'
-  return undefined
+const BUCKET_SEVERITY: Record<string, string> = {
+  '0-30': 'secondary', '31-60': 'warn', '61-90': 'danger', '90+': 'danger',
 }
 
-function onRowClick(event: any) {
-  router.push(`/clients/${event.data.inn}`)
+async function onStatusChange(row: any, newStatus: string) {
+  const prev = row.status
+  if (newStatus === prev) return
+  row.status = newStatus
+  try {
+    await api.patch(`/organizations/${row.inn}`, { status: newStatus })
+    toast.add({
+      severity: 'success', summary: 'Статус обновлён',
+      detail: row.name, life: 2500,
+    })
+  } catch {
+    row.status = prev
+    toast.add({
+      severity: 'error', summary: 'Не удалось сохранить статус',
+      detail: row.name, life: 4000,
+    })
+  }
+}
+
+function openClient(inn: string) {
+  router.push(`/clients/${inn}`)
 }
 </script>
 
 <template>
   <div class="debtors-view">
-    <h1>Должники</h1>
+    <h1>Реестр должников</h1>
 
-    <div class="aging-chart-container">
-      <h3>Aging buckets (просрочка по срокам)</h3>
-      <v-chart :option="agingChartOption" style="height: 200px" autoresize />
-    </div>
+    <SegmentBand :metrics="metrics" :segments="segments" v-model="bucket" />
 
     <DataTable
-      :value="debtors"
+      :value="filteredRows"
       :loading="loading"
+      sortField="total_debt"
+      :sortOrder="-1"
+      paginator
+      :rows="25"
       stripedRows
       rowHover
-      @row-click="onRowClick"
       class="debtors-table"
+      @row-click="(e: any) => openClient(e.data.inn)"
     >
-      <Column header="Клиент">
-        <template #body="{ data }">
-          {{ data.name_display || data.name_1c }}
-        </template>
-      </Column>
+      <Column field="name" header="Клиент" sortable />
       <Column field="inn" header="ИНН" style="width: 130px" />
-      <Column field="monthly_ap" header="АП/мес" style="width: 130px">
-        <template #body="{ data }">{{ formatCurrency(data.monthly_ap) }}</template>
+      <Column field="monthly_ap" header="АП/мес" sortable style="width: 120px">
+        <template #body="{ data }">{{ fmtRub(data.monthly_ap) }}</template>
       </Column>
-      <Column field="total_debt" header="Долг" sortable style="width: 150px">
+      <Column field="total_debt" header="Долг" sortable style="width: 140px">
         <template #body="{ data }">
-          <Tag :severity="debtSeverity(data.total_debt)">
-            {{ formatCurrency(data.total_debt) }}
+          <Tag severity="danger">{{ fmtRub(data.total_debt) }}</Tag>
+        </template>
+      </Column>
+      <Column field="months_overdue" header="Просрочка, мес" sortable style="width: 130px">
+        <template #body="{ data }">{{ data.months_overdue ?? '—' }}</template>
+      </Column>
+      <Column field="aging_bucket" header="Корзина" style="width: 110px">
+        <template #body="{ data }">
+          <Tag :severity="BUCKET_SEVERITY[data.aging_bucket] || 'secondary'">
+            {{ data.aging_bucket }}
           </Tag>
         </template>
       </Column>
-      <Column field="payment_score" header="Оценка" style="width: 100px" />
-      <Column field="status" header="Статус" style="width: 110px">
+      <Column header="Статус" style="width: 170px">
         <template #body="{ data }">
-          <Tag :severity="data.status === 'active' ? 'success' : 'secondary'">
-            {{ data.status }}
-          </Tag>
+          <Select
+            :modelValue="data.status"
+            :options="statusOptions"
+            optionLabel="label"
+            optionValue="value"
+            size="small"
+            @click.stop
+            @update:modelValue="(v: string) => onStatusChange(data, v)"
+          />
         </template>
+      </Column>
+      <Column field="payment_score" header="Оценка" style="width: 90px">
+        <template #body="{ data }">{{ data.payment_score ?? '—' }}</template>
       </Column>
     </DataTable>
   </div>
@@ -129,28 +165,15 @@ function onRowClick(event: any) {
 <style scoped>
 .debtors-view {
   padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
 }
-
 .debtors-view h1 {
   font-size: 1.5rem;
   color: #1e293b;
-  margin: 0 0 1.5rem;
+  margin: 0;
 }
-
-.aging-chart-container {
-  background: white;
-  border-radius: 8px;
-  padding: 1.25rem;
-  margin-bottom: 1.5rem;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
-}
-
-.aging-chart-container h3 {
-  margin: 0 0 0.75rem;
-  font-size: 1rem;
-  color: #374151;
-}
-
 .debtors-table {
   cursor: pointer;
 }

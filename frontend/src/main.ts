@@ -2,6 +2,7 @@ import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import piniaPluginPersistedstate from 'pinia-plugin-persistedstate'
 import PrimeVue from 'primevue/config'
+import ToastService from 'primevue/toastservice'
 import Aura from '@primevue/themes/aura'
 import 'primeicons/primeicons.css'
 
@@ -20,4 +21,5 @@ app.use(PrimeVue, {
     preset: Aura,
   },
 })
+app.use(ToastService)
 app.mount('#app')

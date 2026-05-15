@@ -9,8 +9,16 @@ import ProgressBar from 'primevue/progressbar'
 import SelectButton from 'primevue/selectbutton'
 import MultiSelect from 'primevue/multiselect'
 import { FilterMatchMode } from '@primevue/core/api'
+import VChart from 'vue-echarts'
+import { use } from 'echarts/core'
+import { HeatmapChart } from 'echarts/charts'
+import { GridComponent, TooltipComponent, VisualMapComponent } from 'echarts/components'
+import { CanvasRenderer } from 'echarts/renderers'
 import { useOrganizationsStore } from '../stores/organizations'
+import SegmentBand from '../components/SegmentBand.vue'
 import api from '../api/client'
+
+use([HeatmapChart, GridComponent, TooltipComponent, VisualMapComponent, CanvasRenderer])
 
 const store = useOrganizationsStore()
 const router = useRouter()
@@ -18,13 +26,17 @@ const search = ref('')
 const page = ref(1)
 const pageSize = 25
 
-// Mode toggle
-const mode = ref<'clients' | 'contracts' | 'registry'>('clients')
+const mode = ref<'clients' | 'contracts' | 'registry' | 'matrix'>('clients')
 const modeOptions = [
   { label: 'По клиентам', value: 'clients' },
+  { label: 'Шахматка', value: 'matrix' },
   { label: 'По договорам', value: 'contracts' },
   { label: 'По реестру', value: 'registry' },
 ]
+
+// Segments
+const segmentsData = ref<any>(null)
+const activeSegment = ref('all')
 
 // Contracts mode state
 const contracts = ref<any[]>([])
@@ -51,6 +63,10 @@ const registryFilters = ref<any>({
   city_region: { value: null, matchMode: FilterMatchMode.IN },
   doc_exchange: { value: null, matchMode: FilterMatchMode.IN },
 })
+
+// Matrix mode state
+const matrix = ref<any>({ months: [], orgs: [], cells: [] })
+const matrixLoading = ref(false)
 
 const objectTypeOptions = computed(() =>
   [...new Set(registryItems.value.map(r => r.object_type).filter(Boolean))].sort()
@@ -95,13 +111,32 @@ async function loadRegistry() {
   }
 }
 
+async function loadMatrix() {
+  matrixLoading.value = true
+  try {
+    const res = await api.get('/dashboard/payment-matrix?months=12')
+    matrix.value = res.data
+  } finally {
+    matrixLoading.value = false
+  }
+}
+
 function loadData() {
   if (mode.value === 'clients') loadClients()
   else if (mode.value === 'contracts') loadContracts()
+  else if (mode.value === 'matrix') loadMatrix()
   else loadRegistry()
 }
 
-onMounted(loadData)
+onMounted(async () => {
+  loadData()
+  try {
+    const res = await api.get('/billing/segments')
+    segmentsData.value = res.data
+  } catch {
+    /* шапка сегментов не критична */
+  }
+})
 
 let searchTimeout: ReturnType<typeof setTimeout>
 watch(search, () => {
@@ -121,6 +156,33 @@ watch(mode, () => {
   search.value = ''
   registryFilters.value.global.value = null
   loadData()
+})
+
+// Сегмент «Должники» ведёт на отдельный реестр должников
+watch(activeSegment, (v) => {
+  if (v === 'debtors') {
+    router.push('/debtors')
+    activeSegment.value = 'all'
+  }
+})
+
+const segmentMetrics = computed(() => {
+  const s = segmentsData.value
+  if (!s) return []
+  return [
+    { label: 'Клиентов', value: String(s.total) },
+    { label: 'MRR план', value: formatCurrency(s.mrr_plan) },
+    { label: 'Платят', value: String(s.paying) },
+    { label: 'Частично', value: String(s.partial) },
+    { label: 'Не платят', value: String(s.not_paying) },
+  ]
+})
+const segmentButtons = computed(() => {
+  const s = segmentsData.value
+  return [
+    { key: 'all', label: 'Реестр' },
+    { key: 'debtors', label: `Должники${s ? ' · ' + s.debtors : ''} →` },
+  ]
 })
 
 function onPage(event: any) {
@@ -188,6 +250,60 @@ const contractStatusLabel: Record<string, string> = {
   completed: 'Завершён',
   terminated: 'Расторгнут',
 }
+
+// --- Шахматка платежей ---
+const matrixHeight = computed(() => Math.max(360, Math.min(2400, matrix.value.orgs.length * 18)))
+const matrixChartOption = computed(() => {
+  if (!matrix.value.orgs.length) return {}
+  const heatmapData = matrix.value.cells.map((c: any) => [
+    c.col, c.row, c.ratio == null ? null : Math.min(150, c.ratio),
+  ])
+  return {
+    tooltip: {
+      formatter: (p: any) => {
+        const c = matrix.value.cells.find((cc: any) => cc.row === p.value[1] && cc.col === p.value[0])
+        const org = matrix.value.orgs[p.value[1]]
+        const month = matrix.value.months[p.value[0]]
+        if (!c || !org) return ''
+        return `<b>${org.name}</b><br>${month}<br>План: <b>${formatCurrency(c.plan)}</b><br>Факт: <b>${formatCurrency(c.paid)}</b>` +
+               (c.ratio != null ? `<br>Собираемость: <b>${c.ratio}%</b>` : '')
+      },
+    },
+    grid: { left: 240, right: 30, top: 70, bottom: 30 },
+    xAxis: {
+      type: 'category', data: matrix.value.months,
+      position: 'top', splitArea: { show: true },
+      axisLabel: { fontSize: 11 },
+    },
+    yAxis: {
+      type: 'category',
+      data: matrix.value.orgs.map((o: any) => o.name.length > 32 ? o.name.substring(0, 30) + '…' : o.name),
+      splitArea: { show: true },
+      axisLabel: { fontSize: 10, width: 220, overflow: 'truncate' },
+    },
+    visualMap: {
+      min: 0, max: 100, calculable: false,
+      orient: 'horizontal', left: 'center', top: 30,
+      itemWidth: 12, itemHeight: 200,
+      inRange: { color: ['#fef2f2', '#fee2e2', '#fed7aa', '#fef3c7', '#d1fae5', '#86efac', '#22c55e'] },
+      text: ['100%+', '0%'],
+      textStyle: { fontSize: 10 },
+    },
+    series: [{
+      type: 'heatmap',
+      data: heatmapData,
+      emphasis: { itemStyle: { borderColor: '#1e293b', borderWidth: 1 } },
+      itemStyle: { borderColor: '#f1f5f9', borderWidth: 1 },
+    }],
+  }
+})
+
+function onMatrixClick(event: any) {
+  if (event.componentType !== 'series') return
+  const row = event.value?.[1]
+  const org = matrix.value.orgs[row]
+  if (org?.inn) router.push(`/clients/${org.inn}`)
+}
 </script>
 
 <template>
@@ -197,6 +313,7 @@ const contractStatusLabel: Record<string, string> = {
       <div class="header-controls">
         <SelectButton v-model="mode" :options="modeOptions" optionLabel="label" optionValue="value" />
         <InputText
+          v-if="mode !== 'matrix'"
           v-model="search"
           :placeholder="mode === 'clients' ? 'Поиск по имени или ИНН...' :
                        mode === 'contracts' ? 'Поиск по контрагенту, ИНН, договору...' :
@@ -205,6 +322,14 @@ const contractStatusLabel: Record<string, string> = {
         />
       </div>
     </div>
+
+    <SegmentBand
+      v-if="segmentsData"
+      :metrics="segmentMetrics"
+      :segments="segmentButtons"
+      v-model="activeSegment"
+      class="segment-band-spacing"
+    />
 
     <!-- Режим: По клиентам -->
     <DataTable
@@ -249,6 +374,23 @@ const contractStatusLabel: Record<string, string> = {
       <Column field="city_region" header="Город" style="width: 150px" />
     </DataTable>
 
+    <!-- Режим: Шахматка -->
+    <div v-else-if="mode === 'matrix'" class="matrix-card">
+      <div class="matrix-title">
+        Шахматка платежей: клиенты × месяцы
+        <span class="hint">▶ клик по строке — карточка клиента</span>
+      </div>
+      <v-chart
+        v-if="matrix.orgs.length"
+        :option="matrixChartOption"
+        :style="{ height: matrixHeight + 'px' }"
+        autoresize
+        @click="onMatrixClick"
+      />
+      <div v-else-if="matrixLoading" class="empty-state">Загрузка…</div>
+      <div v-else class="empty-state">Нет активных подписчиков с АП.</div>
+    </div>
+
     <!-- Режим: По договорам -->
     <DataTable
       v-else-if="mode === 'contracts'"
@@ -266,7 +408,7 @@ const contractStatusLabel: Record<string, string> = {
       rowHover
       class="contract-table"
       scrollable
-      scrollHeight="calc(100vh - 220px)"
+      scrollHeight="calc(100vh - 280px)"
     >
       <Column field="org_name" header="Контрагент" sortable style="min-width: 200px" />
       <Column field="org_inn" header="ИНН" style="width: 130px" />
@@ -312,7 +454,7 @@ const contractStatusLabel: Record<string, string> = {
       rowHover
       class="registry-table"
       scrollable
-      scroll-height="calc(100vh - 240px)"
+      scroll-height="calc(100vh - 300px)"
       removableSort
     >
       <template #empty>Нет данных в реестре.</template>
@@ -448,7 +590,7 @@ const contractStatusLabel: Record<string, string> = {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 1.5rem;
+  margin-bottom: 1rem;
   gap: 1rem;
 }
 
@@ -470,10 +612,39 @@ const contractStatusLabel: Record<string, string> = {
   width: 320px;
 }
 
+.segment-band-spacing {
+  margin-bottom: 1rem;
+}
+
 .client-table,
 .contract-table,
 .registry-table {
   cursor: pointer;
+}
+
+.matrix-card {
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  overflow: auto;
+}
+.matrix-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #1e293b;
+  margin-bottom: 0.5rem;
+}
+.matrix-title .hint {
+  font-weight: 400;
+  font-size: 0.8rem;
+  color: #94a3b8;
+  margin-left: 0.5rem;
+}
+.empty-state {
+  padding: 2rem;
+  text-align: center;
+  color: #64748b;
 }
 
 .truncate {
