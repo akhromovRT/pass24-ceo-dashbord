@@ -2,6 +2,7 @@
 
 Все аналитические эндпоинты автоматически фильтруют организации с
 excluded_from_analytics=True."""
+import calendar
 from datetime import date, timedelta
 from decimal import Decimal
 
@@ -148,6 +149,27 @@ def dashboard_summary(session: Session = Depends(get_session)):
     ).all())
     churned_60d = sum(1 for oid in paying_active if oid not in recently_paid_ids)
 
+    # --- текущий (незакрытый) месяц ---
+    cur_collected = _fact_mrr_for_month(session, today.year, today.month)
+    days_in_month = calendar.monthrange(today.year, today.month)[1]
+
+    # --- доля корзины 90+ ---
+    debt_90plus = 0.0
+    orgs_debt = session.exec(
+        select(Organization).where(
+            _excl(),
+            Organization.total_debt.is_not(None),  # type: ignore[union-attr]
+            Organization.total_debt > 0,  # type: ignore[operator]
+        )
+    ).all()
+    for o in orgs_debt:
+        d = _f(o.total_debt)
+        monthly = _f(o.monthly_ap) or 1
+        if (d / monthly if monthly > 0 else 999) > 3:
+            debt_90plus += d
+    debt_90plus_share = round(debt_90plus / total_debt * 100, 1) if total_debt else 0.0
+    collection_rate_fact = round(fact_mrr / plan_mrr * 100, 1) if plan_mrr else None
+
     return {
         "mrr_fact": fact_mrr,
         "mrr_plan": plan_mrr,
@@ -162,6 +184,13 @@ def dashboard_summary(session: Session = Depends(get_session)):
         "fact_month": f"{prev_y}-{prev_m:02d}",
         "mrr": fact_mrr,
         "arr": plan_mrr * 12,
+        "current_month_label": f"{today.year}-{today.month:02d}",
+        "current_month_collected": cur_collected,
+        "days_passed": today.day,
+        "days_in_month": days_in_month,
+        "debt_90plus_amount": round(debt_90plus, 2),
+        "debt_90plus_share": debt_90plus_share,
+        "collection_rate_fact": collection_rate_fact,
     }
 
 
@@ -177,6 +206,70 @@ def mrr_plan_vs_fact(months: int = 12, session: Session = Depends(get_session)):
             "ratio": round(fact / plan_mrr * 100, 1) if plan_mrr else None,
         })
     return series
+
+
+@router.get("/collection-trend")
+def collection_trend(session: Session = Depends(get_session)):
+    """Тренд сбора платежей: только месяцы, где есть хотя бы один PAYMENT."""
+    plan_mrr = _plan_mrr_total(session)
+    rows = session.exec(
+        select(
+            func.extract("year", Document.doc_date).label("y"),
+            func.extract("month", Document.doc_date).label("m"),
+            func.sum(Document.amount).label("fact"),
+        )
+        .join(Organization, Organization.id == Document.organization_id)
+        .where(_excl(), Document.doc_type == DocType.PAYMENT,
+               Document.doc_date.is_not(None))  # type: ignore[union-attr]
+        .group_by("y", "m")
+        .order_by("y", "m")
+    ).all()
+    out = []
+    for y, m, fact in rows:
+        y, m, fact = int(y), int(m), _f(fact)
+        out.append({
+            "year": y, "month": m, "label": f"{m:02d}/{y}",
+            "plan": plan_mrr, "fact": fact,
+            "ratio": round(fact / plan_mrr * 100, 1) if plan_mrr else None,
+        })
+    return out
+
+
+_ALERT_META = {
+    "large_debt": ("Крупная просрочка", "/debtors", 3),
+    "non_payment": ("Неоплата", "/debtors", 3),
+    "churn_risk": ("Риск ухода клиента", "/billing", 2),
+    "collectability_drop": ("Падение собираемости", "/billing", 2),
+    "project_overdue": ("Просрочка проекта", "/billing", 2),
+    "anomaly": ("Аномалия в данных", "/billing", 2),
+    "unassigned_client": ("Клиент без менеджера", "/billing", 1),
+    "phantom_deal": ("Фантомная сделка", "/billing", 1),
+    "new_client": ("Новый клиент", "/billing", 1),
+}
+
+
+@router.get("/attention")
+def attention(session: Session = Depends(get_session)):
+    """Открытые алерты, сгруппированные по типу. Для панели «Требуют внимания»."""
+    rows = session.exec(
+        select(
+            Alert.alert_type,
+            func.count().label("cnt"),
+            func.coalesce(func.sum(Alert.metric_value), 0).label("amount"),
+        )
+        .where(Alert.status == AlertStatus.OPEN)
+        .group_by(Alert.alert_type)
+    ).all()
+    out = []
+    for alert_type, cnt, amount in rows:
+        key = alert_type.value if hasattr(alert_type, "value") else str(alert_type)
+        label, route, weight = _ALERT_META.get(key, (key, "/billing", 1))
+        out.append({
+            "type": key, "label": label, "route": route,
+            "count": int(cnt), "amount": _f(amount), "weight": weight,
+        })
+    out.sort(key=lambda r: (-r["weight"], -r["amount"]))
+    return out
 
 
 @router.get("/aging")
