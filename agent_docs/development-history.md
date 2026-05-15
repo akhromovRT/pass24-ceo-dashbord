@@ -284,3 +284,36 @@ GET /api/v1/contracts(?search,sort_by,sort_dir,page,page_size)
 **Ключевые решения:** ADR-007 (без volumes в Docker), ADR-008 (xlrd конвертация), ADR-009 (режим-переключатель в реестре)
 
 **Следующий шаг:** Импорт банковской выписки через UI, расширение парсера аналитики
+
+### 2026-05-16 — Редизайн рабочих экранов (Dashboard, Реестр, Должники, карточка)
+
+**Контекст:** графики дашборда показывали 7 пустых месяцев (платежи импортированы только с 01/2026), KPI «-23% м/м» вводил в заблуждение (откат от мартовской аномалии 127%), «287 алертов» — голый счётчик. Реестр — плоская таблица без аналитики, карточка клиента — только просмотр.
+
+**Спецификация/планы:** `docs/superpowers/specs/2026-05-15-ceo24-screens-redesign-design.md`, `docs/superpowers/plans/2026-05-15-ceo24-screens-redesign.md`.
+
+**Backend (8 эндпоинтов, без миграций — все поля уже были в моделях):**
+- `PATCH /organizations/{inn}` — редактирование (схема `OrganizationUpdate`, read-only inn/name_1c/total_debt/payment_score/*_raw)
+- `GET /organizations/{inn}/documents` — история документов
+- `GET /users/options` — список менеджеров для не-админов (router-level admin-guard перенесён на конкретные эндпоинты)
+- `GET /dashboard/collection-trend` — тренд сбора только по месяцам с данными
+- `GET /dashboard/attention` — агрегация открытых алертов по типу
+- `dashboard/summary` расширен: current_month_collected, days_passed/in_month, debt_90plus_amount/share, collection_rate_fact
+- `GET /billing/segments` — сегментация (платят/частично/не платят/должники)
+- `GET /billing/debtors` обогащён months_overdue + aging_bucket
+
+**Frontend:**
+- Новые компоненты: `KpiTile`, `SegmentBand`, `AttentionPanel`
+- `DashboardView` переписан: 5 KPI вокруг сбора денег, честный график сбора, aging с кликом на /debtors, панель «Требуют внимания»; шахматка убрана
+- `DebtorsView` переписан: реестр должников с aging-фильтром и инлайн-сменой статуса
+- `BillingView`: шапка сегментов + режим «Шахматка» (heatmap перенесён с дашборда)
+- `ClientCardView` переписан: редактируемый инструмент (все поля правятся, статус меняется), вкладки История платежей / Помесячно / Договоры / Объекты
+- Подключён `ToastService` для уведомлений
+
+**Тесты:** backend 121 passed, 9 skipped (было 106 — добавлено 15: test_api_dashboard.py, test_api_billing.py, PATCH/documents/options). Frontend: vue-tsc чисто, build успешен.
+
+**Не сделано / отложено:**
+- Деплой на production — требует подтверждения пользователя (shared-система, 5 пользователей)
+- Аномалия марта 2026 (собираемость 127%) — внесена в backlog как задача проверки данных
+- Сегменты paying/partial/not_paying на Реестре — пока только числа в шапке (нет серверного фильтра по собираемости в списке организаций)
+
+**Следующий шаг:** деплой и ручная проверка на production; затем P3.1 (сверка платежей с банком — план готов).
