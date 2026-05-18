@@ -9,15 +9,9 @@ import vue from '@vitejs/plugin-vue'
 function manualChunks(id: string): string | undefined {
   if (!id.includes('node_modules/')) return
   const p = id.split('node_modules/')[1]
-  if (p.startsWith('echarts/')) {
-    // Ядро echarts — одним чанком (порядок инициализации фреймворка
-    // нельзя рвать). charts/components — расширения-листья, грузятся
-    // после ядра и регистрируются в нём, их можно вынести отдельно.
-    const dir = p.split('/')[2]
-    if (dir === 'chart') return 'echarts-charts'
-    if (dir === 'component') return 'echarts-components'
-    return 'echarts-core'
-  }
+  // echarts и zrender взаимозависимы внутри — дробить нельзя (ломается
+  // порядок инициализации классов), каждый идёт ОДНИМ чанком.
+  if (p.startsWith('echarts/')) return 'echarts'
   if (p.startsWith('zrender/')) return 'zrender'
   if (
     p === 'vue' || p.startsWith('vue/') || p.startsWith('@vue/') ||
