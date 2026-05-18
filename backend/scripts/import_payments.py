@@ -31,8 +31,10 @@ def main() -> None:
     engine = create_engine(str(settings.DATABASE_URL), echo=False)
     with Session(engine) as session:
         run = ImportService(session).process_payments_report(result, file_hash=file_hash)
-    print(f"Импорт завершён: {run.documents_count} документов, "
-          f"{run.buyers_count} клиентов, новых {run.new_buyers}")
+        # читаем атрибуты до закрытия сессии (после commit объект expired)
+        summary = (f"Импорт завершён: {run.documents_count} документов, "
+                   f"{run.buyers_count} клиентов, новых {run.new_buyers}")
+    print(summary)
 
 
 if __name__ == "__main__":
