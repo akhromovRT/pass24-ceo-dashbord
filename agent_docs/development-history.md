@@ -9,58 +9,6 @@
 
 ## Записи
 
-### 2026-03-04 — Инициализация проекта
-
-**Что сделано:**
-- Изучена спецификация CEO24 v1.0 (12 разделов, модель данных, API, дорожная карта)
-- Проанализированы 3 реальных файла-источника: задолженность покупателей (1593 строки, 243 покупателя), банковская выписка (35 строк за 1 день), аналитика поступлений (5 листов, 1780 детальных платежей)
-- Выбран подход: классический монолит FastAPI + Vue 3 + PrimeVue + PostgreSQL
-- Скоуп: MVP (6 недель) — парсер 1С, API, реестр клиентов, просрочки, базовый дашборд
-- Заполнены проектные файлы: AGENTS.md, architecture.md, adr.md (5 решений), README.md
-- Создан дизайн-документ: `docs/plans/2026-03-04-ceo24-mvp-design.md`
-
-**Ключевые решения:** ADR-001..005 (монолит, SQLModel, иммутабельные снапшоты, три источника данных, расширенная модель organizations)
-
-**Следующий шаг:** Создание implementation plan, scaffold проекта
-
-### 2026-03-04 — Scaffold backend (Tasks 1-3)
-
-**Что сделано:**
-- Создан implementation plan: `docs/plans/2026-03-04-ceo24-mvp-implementation.md` (25 задач, 6 фаз)
-- Task 1: Backend scaffold — pyproject.toml (hatchling), FastAPI app с CORS и /health, pydantic-settings конфиг, SQLModel database module
-- Task 2: Docker Compose (postgres:16-alpine + backend) и Dockerfile. Docker не установлен на машине — файлы готовы к использованию
-- Task 3: SQLModel модели — Organization (15+ полей, OrgType/OrgStatus enum), Contract (автоклассификация, ContractType enum), Document (DocType enum, denormalized org FK). 8 unit-тестов
-
-**Окружение:**
-- Python 3.12.12 через `uv` (venv в `backend/.venv`)
-- Docker отсутствует на машине — для тестов используется SQLite in-memory
-- Git-репозиторий инициализирован
-
-**Файловая структура:**
-```
-backend/
-├── pyproject.toml          # hatchling, deps, ruff, pytest config
-├── Dockerfile
-├── .env.example
-├── app/
-│   ├── main.py             # FastAPI app + CORS + /health
-│   ├── core/
-│   │   ├── config.py       # Settings via pydantic-settings
-│   │   └── database.py     # SQLModel engine + get_session
-│   └── models/
-│       ├── __init__.py      # re-exports всех моделей
-│       ├── organization.py  # Organization + OrgType + OrgStatus
-│       ├── contract.py      # Contract + ContractType + ContractStatus
-│       └── document.py      # Document + DocType
-└── tests/
-    └── test_models.py       # 8 тестов
-docker-compose.yml           # PostgreSQL + backend
-```
-
-**Ключевые решения:** ADR-006 (uv вместо pip для управления зависимостями)
-
-**Следующий шаг:** Tasks 4-5 (остальные модели + Alembic миграции)
-
 ### 2026-03-05 — Phase 1 завершена (Tasks 4-5)
 
 **Что сделано:**
@@ -317,3 +265,33 @@ GET /api/v1/contracts(?search,sort_by,sort_dir,page,page_size)
 - Сегменты paying/partial/not_paying на Реестре — пока только числа в шапке (нет серверного фильтра по собираемости в списке организаций)
 
 **Следующий шаг:** деплой и ручная проверка на production; затем P3.1 (сверка платежей с банком — план готов).
+
+### 2026-05-18 — Учёт абонентской платы (AR-леджер)
+
+**Контекст:** аномалия марта 2026 (собираемость 127%) при расследовании оказалась не ошибкой данных, а дефектом определения метрики: `collection-trend` суммировал валовой приток платежей по дате прихода и сравнивал с планом одного месяца. Платежи приходят неравномерно (за прошлые / текущий / будущие периоды).
+
+**Спецификация/план:** `docs/superpowers/specs/2026-05-18-subscription-ar-ledger-design.md`, `docs/superpowers/plans/2026-05-18-subscription-ar-ledger.md`. Фича поглотила backlog-пункт P3.1.
+
+**Что сделано:**
+- **3 новые таблицы** (миграция `8f49f48e53dc`): `tariff_periods` (история тарифа), `monthly_charges` (месячные начисления), `payment_allocations` (разнесение платежа на начисления).
+- **Парсер периодов** `app/parser/period_extraction.py` — slash-формат с валидацией, названия месяцев, диапазоны, «на N месяцев», классификация `payment_kind`. Чинит мусор вида `month=63`.
+- **`ChargeService`** — лента начислений: реальная 1С-Реализация (subscription-`SALE`) где есть, синтетика из тарифа — для пропусков.
+- **`AllocationService`** — детерминированное разнесение платежей: лестница приоритетов (явный период → FIFO → аванс в будущие месяцы, горизонт 24 мес), сохранение ручных аллокаций; пересчёт = чистая функция от данных.
+- **Источник платежей** — реестр «Оплата от покупателей» из 1С (2017-2026, 10157 платежей): парсер `payments_report.py`, импорт через `source_type=payments` на синтетический контракт `1C-PAYMENTS`.
+- **Backfill** `scripts/build_ledger.py` — идемпотентное построение леджера по существующим данным.
+- **Метрики дашборда на леджере:** `collection-trend` (собираемость периода), новый `cash-inflow` (структура поступлений), `aging`/`payment-matrix`/`mrr-plan-vs-fact`/`summary` переведены на леджер.
+- **API карточки клиента:** `GET /organizations/{inn}/ledger`, история тарифа (`GET/POST /{inn}/tariffs`), ручная правка разнесения (`PUT /payments/{id}/allocations`).
+- **Фронтенд:** компоненты `CashInflowChart`, `LedgerTable`, `AllocationEditor`, `TariffHistory`; дашборд переведён на честную собираемость + структуру поступлений; в карточке клиента — вкладка «Расчёты».
+
+**Тесты:** backend 152 passed, 9 skipped (было 121; +31 теста). Frontend: `vue-tsc` чисто, build успешен. ruff чисто по новым файлам.
+
+**Проверка на копии production-БД** (бэкап 2026-05-16 + полная история платежей): собираемость 2025-2026 — 77-90%, март 2026 — **83%** (было 127%). Аномалия закрыта.
+
+**ADR:** ADR-012 (модель AR-леджера).
+
+**Не сделано / отложено:**
+- Деплой на production — требует подтверждения пользователя (§11 spec): дамп → миграция → импорт реестра оплат → `build_ledger`.
+- ~27% платежей при backfill попали в бакет «не определён» — в основном исторические неподписочные плательщики без начислений; приемлемо.
+- Справочник контрагентов 1С не использован (ИНН в реестре оплат заполнен на 99%) — в backlog для возможного обогащения имён.
+
+**Следующий шаг:** деплой на production с подтверждением пользователя.
