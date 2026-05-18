@@ -6,6 +6,7 @@ from pathlib import Path
 
 import openpyxl
 
+from app.parser.period_extraction import extract_periods
 from app.parser.utils import load_workbook_any
 
 _INVOICE_RE = re.compile(
@@ -42,6 +43,9 @@ class PaymentInfo:
     period_month: int | None = None
     period_year: int | None = None
     tariff: str | None = None
+    periods: list = field(default_factory=list)  # list[(year, month)]
+    coverage_months: int | None = None
+    payment_kind: str = "subscription"
 
 
 @dataclass
@@ -151,6 +155,14 @@ def parse_bank_statement(file_path: str | Path) -> BankStatementResult:
         doc_number = str(ws.cell(row=row_idx, column=2).value or "").strip()
         doc_type = str(ws.cell(row=row_idx, column=13).value or "").strip() or None
 
+        info = extract_payment_info(description)
+        ep = extract_periods(description, parsed_date)
+        info.periods = ep.periods
+        info.coverage_months = ep.coverage_months
+        info.payment_kind = ep.payment_kind
+        if ep.periods:
+            info.period_year, info.period_month = ep.periods[0]
+
         payment = ParsedPayment(
             date=parsed_date,
             doc_number=doc_number,
@@ -159,7 +171,7 @@ def parse_bank_statement(file_path: str | Path) -> BankStatementResult:
             inn=inn,
             description=description,
             doc_type=doc_type,
-            payment_info=extract_payment_info(description),
+            payment_info=info,
         )
         result.payments.append(payment)
 
