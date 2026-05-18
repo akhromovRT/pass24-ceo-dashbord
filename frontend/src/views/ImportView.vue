@@ -24,13 +24,18 @@ const SOURCE_TYPES = [
     label: 'Клиентская база (реестр)',
     hint: 'Проставляет «В реестре = Да», переносит договор/доп.документ/объекты.',
   },
+  {
+    value: 'payments',
+    label: 'Оплата от покупателей (1С)',
+    hint: 'Полная история платежей из 1С — источник для AR-леджера. Платежи разносятся по месячным начислениям.',
+  },
 ]
 
 const runs = ref<any[]>([])
 const uploadResult = ref<any>(null)
 const uploadError = ref('')
 const loading = ref(false)
-const sourceType = ref<'debt' | 'bank' | 'registry'>('debt')
+const sourceType = ref<'debt' | 'bank' | 'registry' | 'payments'>('debt')
 
 async function loadRuns() {
   const res = await api.get('/import/runs')
@@ -77,6 +82,7 @@ function sourceFromRun(run: any): string {
   const ds = run?.delta_summary
   if (ds?.source === 'bank_statement') return 'Банк'
   if (ds?.source === 'registry') return 'Реестр'
+  if (ds?.source === 'payments_report') return 'Оплаты'
   return '1С (задолженность)'
 }
 
