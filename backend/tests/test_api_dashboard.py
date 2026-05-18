@@ -13,11 +13,15 @@ from app.models import (
     AlertSeverity,
     AlertStatus,
     AlertType,
+    AllocationBasis,
+    ChargeSource,
     Contract,
     Document,
     DocType,
+    MonthlyCharge,
     Organization,
     OrgStatus,
+    PaymentAllocation,
     User,
     UserRole,
 )
@@ -38,38 +42,81 @@ def client(db_session: Session):
     app.dependency_overrides.clear()
 
 
-@pytest.fixture
-def org_with_payments(db_session: Session) -> Organization:
-    org = Organization(inn="7700000001", name_1c="Орг",
-                        status=OrgStatus.ACTIVE, monthly_ap=Decimal("10000"))
+def _make_ledger_org(db_session: Session) -> Organization:
+    """Орг с начислением 01/2026 (10000) и платежом 8000, разнесённым на него."""
+    org = Organization(inn="7700000001", name_1c="Орг", status=OrgStatus.ACTIVE,
+                        monthly_ap=Decimal("10000"))
     db_session.add(org)
-    db_session.commit()
-    db_session.refresh(org)
-    contract = Contract(organization_id=org.id, raw_name="Д")
+    db_session.flush()
+    contract = Contract(organization_id=org.id, contract_number="1C-PAYMENTS",
+                        raw_name="payments")
     db_session.add(contract)
-    db_session.commit()
-    db_session.refresh(contract)
-    for d, amt in [(date(2026, 1, 15), 10000), (date(2026, 3, 10), 8000)]:
-        db_session.add(Document(
-            contract_id=contract.id, organization_id=org.id,
-            doc_type=DocType.PAYMENT, amount=Decimal(amt), doc_date=d,
-        ))
+    db_session.flush()
+    charge = MonthlyCharge(organization_id=org.id, year=2026, month=1,
+                           amount=Decimal("10000"),
+                           source=ChargeSource.SYNTHETIC_TARIFF)
+    db_session.add(charge)
+    db_session.flush()
+    pay = Document(contract_id=contract.id, organization_id=org.id,
+                   doc_type=DocType.PAYMENT, amount=Decimal("8000"),
+                   doc_date=date(2026, 1, 20), raw_name="оплата")
+    db_session.add(pay)
+    db_session.flush()
+    db_session.add(PaymentAllocation(
+        payment_document_id=pay.id, monthly_charge_id=charge.id,
+        allocated_amount=Decimal("8000"), basis=AllocationBasis.FIFO))
     db_session.commit()
     return org
 
 
-def test_collection_trend_only_months_with_data(client, org_with_payments):
+def test_collection_trend_uses_ledger(client, db_session: Session):
+    _make_ledger_org(db_session)
     resp = client.get("/api/v1/dashboard/collection-trend")
     assert resp.status_code == 200
     rows = resp.json()
-    labels = {r["label"] for r in rows}
-    assert labels == {"01/2026", "03/2026"}
+    jan = next(r for r in rows if r["label"] == "01/2026")
+    assert jan["accrued"] == 10000.0
+    assert jan["collected"] == 8000.0
+    assert jan["ratio"] == 80.0
+    assert "is_current_month" in jan
 
 
 def test_collection_trend_empty(client):
     resp = client.get("/api/v1/dashboard/collection-trend")
     assert resp.status_code == 200
     assert resp.json() == []
+
+
+def test_cash_inflow_structure(client, db_session: Session):
+    _make_ledger_org(db_session)
+    resp = client.get("/api/v1/dashboard/cash-inflow")
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert rows
+    for key in ("year", "month", "current", "advance", "arrears",
+                "undetermined", "non_subscription"):
+        assert key in rows[0]
+
+
+def test_aging_from_ledger(client, db_session: Session):
+    _make_ledger_org(db_session)  # начислено 10000, разнесено 8000 → остаток 2000
+    resp = client.get("/api/v1/dashboard/aging")
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert sum(r["amount"] for r in rows) == pytest.approx(2000.0)
+
+
+def test_summary_has_current_month_fields(client, db_session: Session):
+    _make_ledger_org(db_session)
+    resp = client.get("/api/v1/dashboard/summary")
+    assert resp.status_code == 200
+    body = resp.json()
+    for key in ("current_month_label", "current_month_collected",
+                "days_passed", "days_in_month",
+                "debt_90plus_amount", "debt_90plus_share",
+                "collection_rate_fact"):
+        assert key in body
+    assert 1 <= body["days_in_month"] <= 31
 
 
 def test_attention_aggregates_open_alerts(client, db_session: Session):
@@ -96,15 +143,3 @@ def test_attention_aggregates_open_alerts(client, db_session: Session):
     assert debt["count"] == 2
     assert debt["amount"] == 800000.0
     assert all(r["type"] != "new_client" for r in rows)
-
-
-def test_summary_has_current_month_fields(client, org_with_payments):
-    resp = client.get("/api/v1/dashboard/summary")
-    assert resp.status_code == 200
-    body = resp.json()
-    for key in ("current_month_label", "current_month_collected",
-                "days_passed", "days_in_month",
-                "debt_90plus_amount", "debt_90plus_share",
-                "collection_rate_fact"):
-        assert key in body
-    assert 1 <= body["days_in_month"] <= 31
