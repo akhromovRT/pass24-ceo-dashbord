@@ -1,20 +1,24 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 
-// Дробление вендорных бандлов на мелкие чанки. Канал VPS обрывает крупные
-// HTTP-ответы (>~120 КБ) — поэтому echarts/zrender/vue режутся по под-путям,
-// чтобы каждый чанк (в gzip) был заведомо ниже порога обрыва.
+// Дробление вендорных бандлов. Канал VPS обрывает крупные HTTP-ответы —
+// поэтому вендор режется на отдельные чанки. ВАЖНО: echarts и zrender
+// взаимозависимы внутри — их нельзя резать по под-модулям (ломается порядок
+// инициализации), каждый идёт ОДНИМ чанком. PrimeVue-компоненты независимы —
+// их дробим по компонентам.
 function manualChunks(id: string): string | undefined {
   if (!id.includes('node_modules/')) return
   const p = id.split('node_modules/')[1]
   if (p.startsWith('echarts/')) {
-    const parts = p.split('/')
-    return 'echarts-' + (parts[2] || parts[1] || 'core').replace(/\.js$/, '')
+    // Ядро echarts — одним чанком (порядок инициализации фреймворка
+    // нельзя рвать). charts/components — расширения-листья, грузятся
+    // после ядра и регистрируются в нём, их можно вынести отдельно.
+    const dir = p.split('/')[2]
+    if (dir === 'chart') return 'echarts-charts'
+    if (dir === 'component') return 'echarts-components'
+    return 'echarts-core'
   }
-  if (p.startsWith('zrender/')) {
-    const parts = p.split('/')
-    return 'zrender-' + (parts[2] || parts[1] || 'core').replace(/\.js$/, '')
-  }
+  if (p.startsWith('zrender/')) return 'zrender'
   if (
     p === 'vue' || p.startsWith('vue/') || p.startsWith('@vue/') ||
     p.startsWith('vue-router/') || p.startsWith('pinia/') ||
