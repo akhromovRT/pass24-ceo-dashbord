@@ -12,6 +12,7 @@ import { CanvasRenderer } from 'echarts/renderers'
 import api from '../api/client'
 import KpiTile from '../components/KpiTile.vue'
 import AttentionPanel from '../components/AttentionPanel.vue'
+import CashInflowChart from '../components/CashInflowChart.vue'
 
 use([
   BarChart, LineChart,
@@ -24,18 +25,21 @@ const summary = ref<any>(null)
 const trend = ref<any[]>([])
 const aging = ref<any[]>([])
 const attention = ref<any[]>([])
+const cashInflow = ref<any[]>([])
 
 onMounted(async () => {
-  const [s, t, a, at] = await Promise.all([
+  const [s, t, a, at, ci] = await Promise.all([
     api.get('/dashboard/summary'),
     api.get('/dashboard/collection-trend'),
     api.get('/dashboard/aging'),
     api.get('/dashboard/attention'),
+    api.get('/dashboard/cash-inflow'),
   ])
   summary.value = s.data
   trend.value = t.data
   aging.value = a.data
   attention.value = at.data
+  cashInflow.value = ci.data
 })
 
 function fmt(value: number | null, digits = 0) {
@@ -63,12 +67,14 @@ const collectionChartOption = computed(() => ({
   tooltip: {
     trigger: 'axis',
     formatter: (params: any[]) => {
-      const head = `<b>${params[0].axisValue}</b>`
-      const lines = params.map(p => `${p.marker} ${p.seriesName}: <b>${fmtRub(p.value)}</b>`)
-      return [head, ...lines].join('<br>')
+      const row = trend.value[params[0].dataIndex] || {}
+      const tail = row.is_current_month ? '<br><i>месяц не закрыт</i>' : ''
+      return `<b>${row.label}</b><br>Начислено: <b>${fmtRub(row.accrued)}</b><br>` +
+             `Собрано: <b>${fmtRub(row.collected)}</b><br>` +
+             `Собираемость: <b>${row.ratio ?? '—'}%</b>${tail}`
     },
   },
-  legend: { data: ['План', 'Факт'], top: 0 },
+  legend: { data: ['Начислено', 'Собрано'], top: 0 },
   grid: { left: 64, right: 24, top: 36, bottom: 28 },
   xAxis: {
     type: 'category',
@@ -81,20 +87,21 @@ const collectionChartOption = computed(() => ({
   },
   series: [
     {
-      name: 'План',
+      name: 'Начислено',
       type: 'line',
-      data: trend.value.map(s => s.plan),
+      data: trend.value.map(s => s.accrued),
       lineStyle: { type: 'dashed', color: '#94a3b8', width: 2 },
       itemStyle: { color: '#94a3b8' },
       symbol: 'none',
     },
     {
-      name: 'Факт',
+      name: 'Собрано',
       type: 'bar',
       data: trend.value.map(s => ({
-        value: s.fact,
+        value: s.collected,
         itemStyle: {
-          color: s.ratio == null ? '#94a3b8'
+          color: s.is_current_month ? '#cbd5e1'
+               : s.ratio == null ? '#94a3b8'
                : s.ratio >= 95 ? '#22c55e'
                : s.ratio >= 70 ? '#f59e0b'
                : '#ef4444',
@@ -196,19 +203,19 @@ function onAgingClick(event: any) {
 
     <div class="charts-row">
       <div class="chart-card">
-        <div class="chart-title">Сбор платежей по месяцам</div>
+        <div class="chart-title">Собираемость по месяцам (собрано за период ÷ начислено)</div>
         <v-chart
           v-if="hasTrend"
           :option="collectionChartOption"
           style="height: 280px"
           autoresize
         />
-        <div v-else class="empty-state">Нет данных о платежах.</div>
+        <div v-else class="empty-state">Нет данных о начислениях.</div>
         <div class="chart-legend">
           <span class="legend-dot" style="background: #22c55e" /> ≥95%
           <span class="legend-dot" style="background: #f59e0b" /> 70-95%
           <span class="legend-dot" style="background: #ef4444" /> &lt;70%
-          (% от плана)
+          собираемости · <span class="legend-dot" style="background: #cbd5e1" /> текущий месяц
         </div>
       </div>
 
@@ -221,6 +228,12 @@ function onAgingClick(event: any) {
           @click="onAgingClick"
         />
       </div>
+    </div>
+
+    <div class="chart-card">
+      <div class="chart-title">Структура поступлений по месяцу прихода денег</div>
+      <CashInflowChart v-if="cashInflow.length" :data="cashInflow" />
+      <div v-else class="empty-state">Нет данных о поступлениях.</div>
     </div>
 
     <AttentionPanel :items="attention" />

@@ -24,6 +24,9 @@ import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/compon
 import { CanvasRenderer } from 'echarts/renderers'
 import { useOrganizationsStore } from '../stores/organizations'
 import api from '../api/client'
+import LedgerTable from '../components/LedgerTable.vue'
+import AllocationEditor from '../components/AllocationEditor.vue'
+import TariffHistory from '../components/TariffHistory.vue'
 
 use([BarChart, LineChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer])
 
@@ -38,6 +41,9 @@ const contracts = ref<any[]>([])
 const objects = ref<any[]>([])
 const documents = ref<any[]>([])
 const managers = ref<any[]>([])
+const ledger = ref<{ months: any[]; payments: any[] }>({ months: [], payments: [] })
+const editorVisible = ref(false)
+const editingPayment = ref<any>(null)
 const loading = ref(true)
 
 const editMode = ref(false)
@@ -84,13 +90,14 @@ const docTypeSeverity: Record<string, string> = {
 
 onMounted(async () => {
   try {
-    const [o, s, c, ob, d, m] = await Promise.all([
+    const [o, s, c, ob, d, m, l] = await Promise.all([
       api.get(`/organizations/${inn}`),
       api.get(`/organizations/${inn}/snapshots`),
       api.get(`/organizations/${inn}/contracts`),
       api.get(`/organizations/${inn}/objects`),
       api.get(`/organizations/${inn}/documents`),
       api.get('/users/options'),
+      api.get(`/organizations/${inn}/ledger`),
     ])
     org.value = o.data
     snapshots.value = s.data
@@ -98,6 +105,7 @@ onMounted(async () => {
     objects.value = ob.data
     documents.value = d.data
     managers.value = m.data
+    ledger.value = l.data
   } finally {
     loading.value = false
   }
@@ -122,6 +130,15 @@ function ensureProtocol(url: string | null | undefined): string {
 function managerName(id: string | null) {
   if (!id) return '—'
   return managers.value.find(m => m.id === id)?.name || '—'
+}
+
+async function reloadLedger() {
+  const r = await api.get(`/organizations/${inn}/ledger`)
+  ledger.value = r.data
+}
+function openEditor(payment: any) {
+  editingPayment.value = payment
+  editorVisible.value = true
 }
 
 function enterEdit() {
@@ -241,6 +258,7 @@ const lineChartOption = computed(() => ({
       <TabList>
         <Tab value="info">Карточка</Tab>
         <Tab value="payments">История платежей</Tab>
+        <Tab value="ledger">Расчёты</Tab>
         <Tab value="monthly">Помесячно</Tab>
         <Tab value="contracts">Договоры</Tab>
         <Tab value="objects">Объекты</Tab>
@@ -419,6 +437,49 @@ const lineChartOption = computed(() => ({
           </DataTable>
         </TabPanel>
 
+        <TabPanel value="ledger">
+          <div class="sections">
+            <section class="fld-section">
+              <h3>Начисления по месяцам</h3>
+              <LedgerTable :months="ledger.months" />
+            </section>
+            <section class="fld-section">
+              <h3>Платежи и разнесение</h3>
+              <DataTable :value="ledger.payments" stripedRows paginator :rows="15">
+                <template #empty>Платежей нет.</template>
+                <Column header="Дата" style="width: 110px">
+                  <template #body="{ data }">{{ formatDate(data.doc_date) }}</template>
+                </Column>
+                <Column field="amount" header="Сумма" style="width: 130px">
+                  <template #body="{ data }">{{ formatCurrency(data.amount) }}</template>
+                </Column>
+                <Column header="Разнесено на">
+                  <template #body="{ data }">
+                    <span v-if="data.allocations.length" class="alloc-tags">
+                      <Tag v-for="(a, i) in data.allocations" :key="i"
+                        :severity="a.year ? 'info' : 'secondary'">
+                        {{ a.year ? `${a.month}/${a.year}` : 'не опр.' }}:
+                        {{ formatCurrency(a.amount) }}{{ a.is_manual ? ' ✎' : '' }}
+                      </Tag>
+                    </span>
+                    <span v-else>—</span>
+                  </template>
+                </Column>
+                <Column header="" style="width: 100px">
+                  <template #body="{ data }">
+                    <Button label="Правка" text size="small" icon="pi pi-pencil"
+                      @click="openEditor(data)" />
+                  </template>
+                </Column>
+              </DataTable>
+            </section>
+            <section class="fld-section">
+              <h3>История тарифа</h3>
+              <TariffHistory :inn="inn" @changed="reloadLedger" />
+            </section>
+          </div>
+        </TabPanel>
+
         <TabPanel value="monthly">
           <div class="charts-grid">
             <div class="chart-box">
@@ -489,6 +550,9 @@ const lineChartOption = computed(() => ({
         </TabPanel>
       </TabPanels>
     </Tabs>
+
+    <AllocationEditor v-model:visible="editorVisible" :payment="editingPayment"
+      @saved="reloadLedger" />
 
     <div v-if="editMode" class="save-bar">
       <span class="save-hint">Режим редактирования</span>
@@ -626,6 +690,11 @@ const lineChartOption = computed(() => ({
   color: #374151;
 }
 .monthly-table { margin-top: 0.5rem; }
+.alloc-tags {
+  display: flex;
+  gap: 0.25rem;
+  flex-wrap: wrap;
+}
 .truncate {
   display: inline-block;
   max-width: 320px;
