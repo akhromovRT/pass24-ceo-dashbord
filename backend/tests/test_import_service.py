@@ -115,3 +115,34 @@ class TestImportService:
         ).first()
         assert "_ДИАДОК" not in org.name_1c
         assert "_СБИС" not in org.name_1c
+
+
+def test_bank_import_triggers_ledger_recompute(db_session: Session):
+    """После банк-импорта у затронутых клиентов появляются payment_allocation."""
+    from app.models import (
+        ChargeSource,
+        MonthlyCharge,
+        OrgStatus,
+        PaymentAllocation,
+        TariffPeriod,
+    )
+    from app.parser.bank_statement import BankStatementResult, ParsedPayment, PaymentInfo
+
+    org = Organization(inn="7700000010", name_1c="Бэнк Клиент",
+                       status=OrgStatus.ACTIVE, monthly_ap=Decimal("8000"))
+    db_session.add(org)
+    db_session.flush()
+    db_session.add(TariffPeriod(organization_id=org.id, valid_from=date(2026, 1, 1),
+                                monthly_amount=Decimal("8000")))
+    db_session.add(MonthlyCharge(organization_id=org.id, year=2026, month=1,
+                                 amount=Decimal("8000"),
+                                 source=ChargeSource.SYNTHETIC_TARIFF))
+    db_session.commit()
+    result = BankStatementResult(filename="t.xlsx", payments=[
+        ParsedPayment(date=date(2026, 1, 15), doc_number="1", amount=Decimal("8000"),
+                      counterparty="Бэнк Клиент", inn="7700000010",
+                      description="оплата за доступ", payment_info=PaymentInfo()),
+    ])
+    ImportService(db_session).process_bank_import(result, file_hash="hash-recompute-1")
+    allocs = db_session.exec(select(PaymentAllocation)).all()
+    assert len(allocs) >= 1

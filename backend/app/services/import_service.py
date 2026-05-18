@@ -318,6 +318,13 @@ class ImportService:
         import_run.status = ImportStatus.COMPLETED
         import_run.completed_at = datetime.now(UTC)
         self.session.add(import_run)
+
+        # Пересчёт AR-леджера для затронутых клиентов
+        from app.services.allocation_service import AllocationService
+        alloc_svc = AllocationService(self.session)
+        for affected_org_id in seen_orgs:
+            alloc_svc.recompute_for_organization(affected_org_id)
+
         self.session.commit()
         return import_run
 
