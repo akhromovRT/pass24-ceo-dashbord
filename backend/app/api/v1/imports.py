@@ -11,6 +11,7 @@ from app.core.database import get_session
 from app.models import ImportRun
 from app.parser.bank_statement import parse_bank_statement
 from app.parser.debt_report import parse_debt_report
+from app.parser.payments_report import parse_payments_report
 from app.parser.registry import parse_registry
 from app.services.import_service import ImportService
 
@@ -24,7 +25,7 @@ router = APIRouter(
 @router.post("/upload")
 def upload_file(
     file: UploadFile,
-    source_type: Literal["debt", "bank", "registry"] = Query(default="debt"),
+    source_type: Literal["debt", "bank", "registry", "payments"] = Query(default="debt"),
     session: Session = Depends(get_session),
 ):
     if not file.filename or not file.filename.endswith((".xls", ".xlsx")):
@@ -68,6 +69,13 @@ def upload_file(
                 raise HTTPException(status_code=422, detail=f"Parse error: {e}")
             reg_result.filename = file.filename
             import_run = svc.process_registry_import(reg_result, file_hash=file_hash)
+        elif source_type == "payments":
+            try:
+                pay_result = parse_payments_report(tmp_path)
+            except ValueError as e:
+                raise HTTPException(status_code=422, detail=f"Parse error: {e}")
+            pay_result.filename = file.filename
+            import_run = svc.process_payments_report(pay_result, file_hash=file_hash)
         else:
             raise HTTPException(status_code=400, detail=f"Unknown source_type: {source_type}")
     finally:

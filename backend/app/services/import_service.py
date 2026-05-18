@@ -26,6 +26,7 @@ _DOC_TYPE_MAP = {
 }
 
 _BANK_SYNTH_CONTRACT_NUMBER = "BANK-IMPORT"
+_PAYMENTS_SYNTH_CONTRACT_NUMBER = "1C-PAYMENTS"
 
 
 def _clean_name(name: str) -> str:
@@ -226,10 +227,24 @@ class ImportService:
 
     # ---- Bank statement import ----
 
+    def process_payments_report(
+        self, result: BankStatementResult, file_hash: str
+    ) -> ImportRun:
+        """Импорт реестра «Оплата от покупателей» из 1С — полная история платежей.
+        Документы создаются на синтетическом контракте 1C-PAYMENTS, чтобы леджер
+        использовал именно этот источник."""
+        return self.process_bank_import(
+            result, file_hash,
+            synthetic_contract=_PAYMENTS_SYNTH_CONTRACT_NUMBER,
+            source_label="payments_report",
+        )
+
     def process_bank_import(
         self,
         bank_result: BankStatementResult,
         file_hash: str,
+        synthetic_contract: str = _BANK_SYNTH_CONTRACT_NUMBER,
+        source_label: str = "bank_statement",
     ) -> ImportRun:
         self._new_buyers = 0
         self._skipped_dup_documents = 0
@@ -279,7 +294,7 @@ class ImportService:
                 continue
 
             org = self._find_or_create_org_from_bank(p, inn)
-            contract = self._get_or_create_bank_contract(org)
+            contract = self._get_or_create_synth_contract(org, synthetic_contract)
             if org.id not in seen_orgs:
                 seen_orgs.add(org.id)
             if contract.id not in seen_contracts:
@@ -307,7 +322,7 @@ class ImportService:
         import_run.new_buyers = self._new_buyers
         import_run.errors = errors or None
         import_run.delta_summary = {
-            "source": "bank_statement",
+            "source": source_label,
             "account_number": bank_result.account_number,
             "owner": bank_result.owner,
             "period_raw": bank_result.period,
@@ -356,11 +371,12 @@ class ImportService:
         ))
         return org
 
-    def _get_or_create_bank_contract(self, org: Organization) -> Contract:
+    def _get_or_create_synth_contract(self, org: Organization,
+                                      contract_number: str) -> Contract:
         existing = self.session.exec(
             select(Contract).where(
                 Contract.organization_id == org.id,
-                Contract.contract_number == _BANK_SYNTH_CONTRACT_NUMBER,
+                Contract.contract_number == contract_number,
             )
         ).first()
         if existing:
@@ -368,11 +384,11 @@ class ImportService:
 
         contract = Contract(
             organization_id=org.id,
-            contract_number=_BANK_SYNTH_CONTRACT_NUMBER,
+            contract_number=contract_number,
             contract_type=ContractType.OTHER,
-            classification_source="bank_import",
+            classification_source="payment_import",
             classification_rule="synthetic",
-            raw_name="Платежи из банк-выписки без привязки к договору 1С",
+            raw_name="Синтетический контракт для платежей без привязки к договору 1С",
             status=ContractStatus.ACTIVE,
         )
         self.session.add(contract)

@@ -25,7 +25,7 @@ def _setup_client(session, monthly="10000"):
     session.add(org)
     session.flush()
     contract = Contract(organization_id=org.id, contract_type=ContractType.OTHER,
-                        contract_number="BANK-IMPORT", raw_name="bank")
+                        contract_number="1C-PAYMENTS", raw_name="payments")
     session.add(contract)
     session.flush()
     return org, contract

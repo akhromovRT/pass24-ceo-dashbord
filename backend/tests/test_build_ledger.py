@@ -23,7 +23,7 @@ def test_build_ledger_end_to_end(db_session):
     db_session.add(org)
     db_session.flush()
     contract = Contract(organization_id=org.id, contract_type=ContractType.OTHER,
-                        contract_number="BANK-IMPORT", raw_name="bank")
+                        contract_number="1C-PAYMENTS", raw_name="payments")
     db_session.add(contract)
     db_session.flush()
     db_session.add(Document(contract_id=contract.id, organization_id=org.id,

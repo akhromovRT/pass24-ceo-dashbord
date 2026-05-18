@@ -7,6 +7,7 @@ from sqlmodel import Session, select
 from app.models import (
     AllocationBasis,
     ChargeSource,
+    Contract,
     Document,
     DocType,
     MonthlyCharge,
@@ -15,6 +16,7 @@ from app.models import (
 from app.parser.period_extraction import extract_periods
 
 _ADVANCE_HORIZON_MONTHS = 24
+_PAYMENTS_CONTRACT = "1C-PAYMENTS"
 
 
 class AllocationService:
@@ -29,12 +31,16 @@ class AllocationService:
         ).all())
 
     def _payments(self, org_id) -> list[Document]:
-        """Subscription-платежи клиента, amount > 0, в хронологическом порядке."""
+        """Платежи клиента из реестра «Оплата от покупателей» (синтетический
+        контракт 1C-PAYMENTS), amount > 0, в хронологическом порядке.
+        payment_kind == other исключаются ниже."""
         rows = self.session.exec(
             select(Document)
+            .join(Contract, Contract.id == Document.contract_id)
             .where(Document.organization_id == org_id,
                    Document.doc_type == DocType.PAYMENT,
-                   Document.amount > 0)
+                   Document.amount > 0,
+                   Contract.contract_number == _PAYMENTS_CONTRACT)
         ).all()
         result = []
         for d in rows:

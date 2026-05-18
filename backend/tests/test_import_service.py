@@ -117,8 +117,9 @@ class TestImportService:
         assert "_СБИС" not in org.name_1c
 
 
-def test_bank_import_triggers_ledger_recompute(db_session: Session):
-    """После банк-импорта у затронутых клиентов появляются payment_allocation."""
+def test_payments_import_triggers_ledger_recompute(db_session: Session):
+    """После импорта реестра оплат у затронутых клиентов появляются
+    payment_allocation."""
     from app.models import (
         ChargeSource,
         MonthlyCharge,
@@ -143,6 +144,6 @@ def test_bank_import_triggers_ledger_recompute(db_session: Session):
                       counterparty="Бэнк Клиент", inn="7700000010",
                       description="оплата за доступ", payment_info=PaymentInfo()),
     ])
-    ImportService(db_session).process_bank_import(result, file_hash="hash-recompute-1")
+    ImportService(db_session).process_payments_report(result, file_hash="hash-recompute-1")
     allocs = db_session.exec(select(PaymentAllocation)).all()
     assert len(allocs) >= 1
