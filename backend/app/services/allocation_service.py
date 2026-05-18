@@ -8,8 +8,8 @@ from app.models import (
     AllocationBasis,
     ChargeSource,
     Contract,
-    Document,
     DocType,
+    Document,
     MonthlyCharge,
     PaymentAllocation,
 )

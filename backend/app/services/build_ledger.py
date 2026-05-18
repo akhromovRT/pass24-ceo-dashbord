@@ -3,7 +3,7 @@ from datetime import date
 
 from sqlmodel import Session, select
 
-from app.models import Document, DocType, Organization, TariffPeriod
+from app.models import DocType, Document, Organization, TariffPeriod
 from app.parser.period_extraction import extract_periods
 from app.services.allocation_service import AllocationService
 from app.services.charge_service import ChargeService

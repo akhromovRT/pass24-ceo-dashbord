@@ -8,8 +8,8 @@ from app.models import (
     ChargeSource,
     Contract,
     ContractType,
-    Document,
     DocType,
+    Document,
     MonthlyCharge,
     TariffPeriod,
 )

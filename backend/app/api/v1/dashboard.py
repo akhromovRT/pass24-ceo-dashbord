@@ -15,8 +15,8 @@ from app.models import (
     Alert,
     AlertStatus,
     Contract,
-    Document,
     DocType,
+    Document,
     MonthlyCharge,
     MonthlySnapshot,
     Organization,
@@ -43,7 +43,8 @@ def _months_back(n: int) -> list[tuple[int, int]]:
         out.append((y, m))
         m -= 1
         if m == 0:
-            m = 12; y -= 1
+            m = 12
+            y -= 1
     return list(reversed(out))
 
 
@@ -466,7 +467,10 @@ def mrr_trend(session: Session = Depends(get_session)):
         .group_by(MonthlySnapshot.year, MonthlySnapshot.month)
         .order_by(MonthlySnapshot.year, MonthlySnapshot.month)
     ).all()
-    return [{"year": r[0], "month": r[1], "sold_ap": _f(r[2]), "paid_ap": _f(r[3])} for r in results]
+    return [
+        {"year": r[0], "month": r[1], "sold_ap": _f(r[2]), "paid_ap": _f(r[3])}
+        for r in results
+    ]
 
 
 @router.get("/payment-matrix")
