@@ -8,6 +8,7 @@ from app.api.v1.contracts import router as contracts_router
 from app.api.v1.dashboard import router as dashboard_router
 from app.api.v1.imports import router as imports_router
 from app.api.v1.organizations import router as organizations_router
+from app.api.v1.payments import router as payments_router
 from app.api.v1.registry import router as registry_router
 from app.api.v1.users import router as users_router
 
@@ -28,6 +29,7 @@ app.include_router(contracts_router, prefix="/api/v1")
 app.include_router(dashboard_router, prefix="/api/v1")
 app.include_router(imports_router, prefix="/api/v1")
 app.include_router(organizations_router, prefix="/api/v1")
+app.include_router(payments_router, prefix="/api/v1")
 app.include_router(registry_router, prefix="/api/v1")
 app.include_router(users_router, prefix="/api/v1")
 

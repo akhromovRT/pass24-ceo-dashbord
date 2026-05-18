@@ -12,11 +12,15 @@ from app.core.database import get_session
 from app.models import (
     ClientObject,
     Contract,
+    DocType,
     Document,
+    MonthlyCharge,
     MonthlySnapshot,
     Organization,
     OrgStatus,
     OrgType,
+    PaymentAllocation,
+    TariffPeriod,
 )
 
 router = APIRouter(
@@ -174,3 +178,126 @@ def update_organization(
     session.commit()
     session.refresh(org)
     return org
+
+
+@router.get("/{inn}/ledger")
+def organization_ledger(inn: str, session: Session = Depends(get_session)):
+    """Леджер клиента: лента месячных начислений + платежи с разнесением."""
+    org = session.exec(
+        select(Organization).where(Organization.inn == inn)
+    ).first()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+
+    charges = session.exec(
+        select(MonthlyCharge)
+        .where(MonthlyCharge.organization_id == org.id)
+        .order_by(MonthlyCharge.year, MonthlyCharge.month)
+    ).all()
+    alloc_by_charge: dict = {}
+    for a in session.exec(
+        select(PaymentAllocation)
+        .join(MonthlyCharge, MonthlyCharge.id == PaymentAllocation.monthly_charge_id)
+        .where(MonthlyCharge.organization_id == org.id)
+    ).all():
+        alloc_by_charge[a.monthly_charge_id] = (
+            alloc_by_charge.get(a.monthly_charge_id, Decimal("0")) + a.allocated_amount
+        )
+
+    months = []
+    for c in charges:
+        allocated = alloc_by_charge.get(c.id, Decimal("0"))
+        outstanding = (c.amount or Decimal("0")) - allocated
+        if allocated <= 0:
+            status = "unpaid"
+        elif outstanding > 0:
+            status = "partial"
+        else:
+            status = "paid"
+        months.append({
+            "year": c.year, "month": c.month, "accrued": float(c.amount or 0),
+            "allocated": float(allocated), "outstanding": float(outstanding),
+            "status": status, "source": c.source.value,
+        })
+
+    payments = []
+    for d in session.exec(
+        select(Document)
+        .where(Document.organization_id == org.id,
+               Document.doc_type == DocType.PAYMENT,
+               Document.amount > 0)
+        .order_by(col(Document.doc_date))
+    ).all():
+        allocs = session.exec(
+            select(PaymentAllocation, MonthlyCharge)
+            .join(MonthlyCharge,
+                  MonthlyCharge.id == PaymentAllocation.monthly_charge_id,
+                  isouter=True)
+            .where(PaymentAllocation.payment_document_id == d.id)
+        ).all()
+        payments.append({
+            "id": str(d.id),
+            "doc_date": str(d.doc_date) if d.doc_date else None,
+            "amount": float(d.amount or 0),
+            "raw_name": d.raw_name,
+            "allocations": [
+                {"year": mc.year if mc else None,
+                 "month": mc.month if mc else None,
+                 "amount": float(a.allocated_amount), "basis": a.basis.value,
+                 "is_manual": a.is_manual}
+                for a, mc in allocs
+            ],
+        })
+    return {"months": months, "payments": payments}
+
+
+class TariffPeriodCreate(BaseModel):
+    valid_from: date
+    monthly_amount: Decimal = PydField(ge=0)
+
+
+@router.get("/{inn}/tariffs")
+def organization_tariffs(inn: str, session: Session = Depends(get_session)):
+    org = session.exec(
+        select(Organization).where(Organization.inn == inn)
+    ).first()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    rows = session.exec(
+        select(TariffPeriod)
+        .where(TariffPeriod.organization_id == org.id)
+        .order_by(col(TariffPeriod.valid_from).desc())
+    ).all()
+    return [{"id": str(t.id), "valid_from": str(t.valid_from),
+             "monthly_amount": float(t.monthly_amount)} for t in rows]
+
+
+@router.post("/{inn}/tariffs")
+def add_organization_tariff(
+    inn: str,
+    payload: TariffPeriodCreate,
+    session: Session = Depends(get_session),
+    user=Depends(get_current_user),
+):
+    """Добавляет тариф, пересобирает начисления и пересчитывает леджер клиента."""
+    org = session.exec(
+        select(Organization).where(Organization.inn == inn)
+    ).first()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    tp = TariffPeriod(organization_id=org.id, valid_from=payload.valid_from,
+                      monthly_amount=payload.monthly_amount, created_by=user.id)
+    session.add(tp)
+    org.monthly_ap = payload.monthly_amount
+    org.updated_at = datetime.now(UTC)
+    session.add(org)
+    session.flush()
+
+    from app.services.allocation_service import AllocationService
+    from app.services.charge_service import ChargeService
+    charge_svc = ChargeService(session)
+    start = charge_svc.charge_start(org.id) or payload.valid_from
+    charge_svc.rebuild_for_organization(org.id, start=start, through=date.today())
+    AllocationService(session).recompute_for_organization(org.id)
+    session.commit()
+    return {"status": "ok", "id": str(tp.id)}
