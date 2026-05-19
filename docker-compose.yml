@@ -48,10 +48,16 @@ services:
     restart: unless-stopped
     ports:
       - "80:80"
+      - "443:443"
     depends_on:
       - backend
+    volumes:
+      # TLS-сертификаты Let's Encrypt (выпуск/продление — см. agent_docs/guides/runbook.md)
+      - /srv/ceo24/certbot/conf:/etc/letsencrypt:ro
+      - /srv/ceo24/certbot/www:/var/www/certbot:ro
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost/"]
+      # 127.0.0.1, не localhost: localhost резолвится в IPv6 ::1, nginx слушает только IPv4
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
       interval: 30s
       timeout: 5s
       retries: 3

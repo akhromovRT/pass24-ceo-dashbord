@@ -47,9 +47,9 @@ CEO24 — веб-приложение с монолитной архитекту
 
 ### Инфраструктура
 - **PostgreSQL 16** — JSONB, оконные функции, CTE
-- **Docker + docker-compose** — PostgreSQL + backend + frontend (nginx baked into image, без volumes)
-- **nginx** — reverse proxy `/api` → backend:8000, статика Vue
-- **Сервер:** Timeweb VPS 85.239.51.34, firewall: порты 22/80/443
+- **Docker + docker-compose** — PostgreSQL + backend + frontend (nginx собран в образ; bind-mount для pgdata и TLS-сертификатов)
+- **nginx** — reverse proxy `/api` → backend:8000, статика Vue, TLS-терминация (Let's Encrypt)
+- **Сервер:** Timeweb VPS 85.239.51.34, домен `ceo.pass24pro.ru`, порты 22/80/443
 
 ## Потоки данных
 

@@ -19,8 +19,9 @@
 
 ## Деплой
 - Сервер: Timeweb VPS 85.239.51.34 (Ubuntu 24.04, обычный VPS — не managed)
+- Домен: `ceo.pass24pro.ru` (A-запись → 85.239.51.34)
 - Стек: Docker Compose (PostgreSQL + FastAPI + Vue/Nginx)
-- URL: http://85.239.51.34
+- URL: https://ceo.pass24pro.ru (HTTPS — Let's Encrypt; HTTP редиректит на HTTPS)
 - Пользователи: `admin@onvi-service.ru` (технический), `akhromov@pass24online.ru` (Алексей Хромов) — оба admin. Пароли в `~/.config/ceo24/credentials` (chmod 600, локально, не в репо)
 - Управление пользователями: UI `/users` (admin-only) или CLI: `ssh ceo24 'docker exec -it $(docker ps -qf name=backend) python scripts/manage_users.py --help'`
 - SSH: `ssh ceo24` (alias в `~/.ssh/config`, ключ `~/.ssh/ceo24_ed25519`)
@@ -33,6 +34,7 @@
 - `agent_docs/guides/logging.md` — логирование скриптов/интеграций.
 - `agent_docs/guides/archiving-and-temp.md` — архивация и временные файлы.
 - `agent_docs/guides/runbook.md` — операционный runbook production-сервера.
+- `agent_docs/guides/import-accountant.md` — инструкция для бухгалтера: импорт выгрузок 1С (оплаты ежедневно, долги еженедельно) и где проверять результат.
 
 ## Шаблоны
 - `agent_docs/templates/architecture.md`

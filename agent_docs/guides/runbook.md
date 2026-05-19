@@ -8,7 +8,7 @@
 |---|---|
 | SSH | `ssh ceo24` (alias в `~/.ssh/config`) |
 | SSH-ключ | `~/.ssh/ceo24_ed25519` |
-| UI | http://85.239.51.34 |
+| UI | https://ceo.pass24pro.ru |
 | Логин | `admin@onvi-service.ru` (пароль — `~/.config/ceo24/credentials`, chmod 600, не в репо) |
 | Compose-директория | `/root/pass24-ceo-dashbord/` |
 | Backups директория на сервере | `/srv/ceo24/backups/` |
@@ -20,7 +20,7 @@
 ### 1. Базовая диагностика
 ```bash
 ping 85.239.51.34                              # хост жив?
-curl -sI http://85.239.51.34/                  # nginx отвечает?
+curl -sI https://ceo.pass24pro.ru/             # nginx отвечает?
 ssh ceo24 'docker ps -a; df -h; free -m'       # контейнеры + диск + память
 ```
 
@@ -71,7 +71,7 @@ docker compose up -d
 
 # 7. Проверка
 docker exec $(docker ps -qf name=db) psql -U ceo24 -d ceo24 -c "SELECT COUNT(*) FROM organizations;"
-curl -sI http://85.239.51.34/
+curl -sI https://ceo.pass24pro.ru/
 ```
 
 Если на ноуте более свежий бэкап (например, серверный диск убит):
@@ -119,6 +119,65 @@ ssh ceo24 'cd /root/pass24-ceo-dashbord && \
   docker compose up -d backend'
 ```
 
+## HTTPS / TLS-сертификат
+
+Сайт обслуживается по HTTPS на домене `ceo.pass24pro.ru`. TLS терминируется в nginx внутри
+`frontend`-контейнера. Сертификат — Let's Encrypt.
+
+| Что | Где |
+|---|---|
+| Сертификат и ключи | `/srv/ceo24/certbot/conf/live/ceo.pass24pro.ru/` |
+| Webroot для ACME-проверки | `/srv/ceo24/certbot/www/` |
+| Конфиг nginx (HTTP-редирект + HTTPS) | `frontend/nginx.conf` (собран в образ) |
+| Автопродление | cron `/etc/cron.d/ceo24-cert-renew`, лог `/var/log/ceo24-cert-renew.log` |
+
+Сертификат монтируется в `frontend`-контейнер двумя bind-mount (`docker-compose.yml`):
+`/srv/ceo24/certbot/conf` → `/etc/letsencrypt` (ro), `/srv/ceo24/certbot/www` → `/var/www/certbot` (ro).
+
+### Проверить срок действия
+
+```bash
+ssh ceo24 'docker run --rm -v /srv/ceo24/certbot/conf:/etc/letsencrypt certbot/certbot certificates'
+```
+
+### Продлить вручную (если автопродление не сработало)
+
+```bash
+ssh ceo24 'docker run --rm \
+  -v /srv/ceo24/certbot/conf:/etc/letsencrypt \
+  -v /srv/ceo24/certbot/www:/var/www/certbot \
+  certbot/certbot certonly --webroot -w /var/www/certbot \
+  -d ceo.pass24pro.ru --non-interactive --keep-until-expiring \
+  --agree-tos -m akhromov@pass24online.ru && \
+  docker exec $(docker ps -qf name=frontend) nginx -s reload'
+```
+
+`--keep-until-expiring` — если до истечения далеко, certbot ничего не делает (команду
+безопасно запускать часто). После успешного продления nginx перечитывает сертификат.
+
+### Первичный выпуск (если каталог сертификатов утрачен)
+
+```bash
+ssh ceo24
+mkdir -p /srv/ceo24/certbot/conf /srv/ceo24/certbot/www
+cd /root/pass24-ceo-dashbord
+docker compose stop frontend                          # порт 80 нужен certbot standalone
+docker run --rm -p 80:80 \
+  -v /srv/ceo24/certbot/conf:/etc/letsencrypt \
+  -v /srv/ceo24/certbot/www:/var/www/certbot \
+  certbot/certbot certonly --standalone \
+  -d ceo.pass24pro.ru --non-interactive --agree-tos -m akhromov@pass24online.ru
+docker compose up -d frontend
+```
+
+### Если HTTPS не открывается
+
+| Симптом | Действие |
+|---|---|
+| Браузер: сертификат истёк | Продлить вручную (см. выше); проверить cron-лог `/var/log/ceo24-cert-renew.log` |
+| `frontend` в `Restarting`, в логах nginx «cannot load certificate» | Файлов сертификата нет в `/srv/ceo24/certbot/conf/live/...` — выполнить первичный выпуск |
+| HTTP не редиректит на HTTPS | Пересобрать образ с актуальным `nginx.conf`: `docker compose build frontend && docker compose up -d frontend` |
+
 ## Состояние подсистем (квик-чек)
 
 ```bash
@@ -133,7 +192,7 @@ ssh ceo24 'docker compose -f /root/pass24-ceo-dashbord/docker-compose.yml ps; \
 
 ### Через UI (если admin может залогиниться)
 
-Зайти на http://85.239.51.34 как admin → меню «Пользователи»:
+Зайти на https://ceo.pass24pro.ru как admin → меню «Пользователи»:
 - Создать нового пользователя (имя, email, роль) → диалог покажет сгенерированный пароль один раз
 - Сбросить пароль любому пользователю → диалог покажет новый пароль
 
@@ -170,17 +229,17 @@ ssh ceo24 'docker exec $(docker ps -qf name=backend) python scripts/manage_users
 ### Через API (если admin может залогиниться)
 
 ```bash
-TOKEN=$(curl -sS -X POST http://85.239.51.34/api/v1/auth/login \
+TOKEN=$(curl -sS -X POST https://ceo.pass24pro.ru/api/v1/auth/login \
     -H "Content-Type: application/x-www-form-urlencoded" \
     --data-urlencode "username=admin@example.ru" \
     --data-urlencode "password=PASSWORD" \
     | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
 
 # Список
-curl -sS http://85.239.51.34/api/v1/users -H "Authorization: Bearer $TOKEN"
+curl -sS https://ceo.pass24pro.ru/api/v1/users -H "Authorization: Bearer $TOKEN"
 
 # Сменить свой пароль
-curl -sS -X POST http://85.239.51.34/api/v1/auth/change-password \
+curl -sS -X POST https://ceo.pass24pro.ru/api/v1/auth/change-password \
     -H "Authorization: Bearer $TOKEN" \
     -H "Content-Type: application/json" \
     -d '{"current_password":"OLD","new_password":"NEW123!@"}'
