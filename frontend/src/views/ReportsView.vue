@@ -76,6 +76,32 @@ const sortDirOptions = [
 const CURRENCY_KEYS = new Set(['monthly_ap', 'total_debt', 'priority'])
 const PERCENT_KEYS = new Set(['collectability', 'on_time'])
 
+// Минимальная ширина колонки — чтобы таблица имела предсказуемую ширину и
+// скроллилась по горизонтали внутри своего контейнера, не растягивая страницу.
+const COLUMN_WIDTH: Record<string, string> = {
+  name: '15rem',
+  inn: '8rem',
+  manager: '10rem',
+  monthly_ap: '8rem',
+  total_debt: '9rem',
+  months_overdue: '9rem',
+  aging_bucket: '7rem',
+  last_payment_date: '9rem',
+  collectability: '9rem',
+  on_time: '8rem',
+  tendency: '8rem',
+  trend: '6rem',
+  unpaid_streak: '11rem',
+  payment_score: '8rem',
+  priority: '11rem',
+  city: '11rem',
+  status: '8rem',
+}
+
+function colMinWidth(key: string): string {
+  return COLUMN_WIDTH[key] || '8rem'
+}
+
 // --- состояние --------------------------------------------------------------
 
 const preset = ref<'debtors' | 'discipline'>('debtors')
@@ -398,7 +424,7 @@ onMounted(() => {
       stripedRows
       rowHover
       scrollable
-      scrollHeight="calc(100vh - 430px)"
+      scrollHeight="flex"
       class="report-table"
     >
       <template #empty>Нет строк по заданным критериям.</template>
@@ -411,6 +437,7 @@ onMounted(() => {
         :field="col.key"
         :header="col.header"
         sortable
+        :style="{ minWidth: colMinWidth(col.key) }"
       >
         <template #body="{ data }">{{ formatCell(col.key, data[col.key]) }}</template>
       </Column>
@@ -436,6 +463,11 @@ onMounted(() => {
 
 <style scoped>
 .reports-view {
+  box-sizing: border-box;
+  /* высота окна — отчёт умещается на одной странице, таблица заполняет
+     остаток и скроллится внутри себя, страница не прокручивается */
+  height: 100vh;
+  min-width: 0;
   padding: 1.5rem;
   display: flex;
   flex-direction: column;
@@ -528,6 +560,9 @@ onMounted(() => {
 }
 
 .report-table {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
   background: white;
   border-radius: 8px;
 }
