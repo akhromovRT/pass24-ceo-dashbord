@@ -9,36 +9,6 @@
 
 ## Записи
 
-### 2026-03-06 — Phase 3 завершена (Tasks 11-13)
-
-**Что сделано:**
-- Task 11: JWT auth — bcrypt (заменён passlib из-за несовместимости), jose JWT HS256, OAuth2PasswordBearer, get_current_user dependency. 3 теста
-- Task 12: Organizations API — GET /organizations (pagination, search ilike по name/INN, filter by status/manager), GET /{inn}, /{inn}/snapshots, /{inn}/contracts. 7 API-тестов через TestClient
-- Task 13: Dashboard API (summary: MRR/ARR/debt/clients/alerts, mrr-trend, aging buckets), Billing API (debtors sorted by debt), Import API (POST upload + duplicate check by hash, GET runs), Alerts API (list + PATCH status)
-- conftest.py обновлён: StaticPool + check_same_thread=False для корректной работы SQLite с TestClient
-- pyproject.toml: passlib[bcrypt] заменён на bcrypt>=4.2
-
-**Тесты:** 74/74 passed
-
-**API endpoints:**
-```
-POST /api/v1/auth/login
-GET  /api/v1/organizations(?search,status,manager_id,page,page_size)
-GET  /api/v1/organizations/{inn}
-GET  /api/v1/organizations/{inn}/snapshots
-GET  /api/v1/organizations/{inn}/contracts
-GET  /api/v1/dashboard/summary
-GET  /api/v1/dashboard/mrr-trend
-GET  /api/v1/dashboard/aging
-GET  /api/v1/billing/debtors(?min_debt)
-POST /api/v1/import/upload
-GET  /api/v1/import/runs
-GET  /api/v1/alerts(?status)
-PATCH /api/v1/alerts/{alert_id}
-```
-
-**Следующий шаг:** Phase 4 — Tasks 14-17 (Vue 3 SPA frontend)
-
 ### 2026-03-06 — Phase 4 завершена (Tasks 14-17)
 
 **Что сделано:**
@@ -318,3 +288,39 @@ HTTP → 301 на HTTPS; API через HTTPS — 401 (ожидаемо без �
 **ADR:** ADR-014 (HTTPS через Let's Encrypt, TLS-терминация в nginx-контейнере).
 
 **Следующий шаг:** наблюдение; проконтролировать срабатывание cron-продления.
+
+### 2026-05-19 — Доработки Dashboard по памятке руководителя
+
+**Контекст:** на основе памятки `agent_docs/guides/dashboard-metrics.md` руководитель
+вписал требования к доработкам раздела Dashboard (R1–R11).
+
+**Backend (`dashboard.py`):**
+- «Структура долга» переработана: каждый клиент с долгом по 1С попадает ровно в одну
+  корзину по календарному возрасту самого раннего неоплаченного начисления леджера;
+  сумма корзин = `total_debt` (сходится с плиткой ДОЛГ). Хелпер `_debt_aging` —
+  единый источник для `/aging`, `/aging/{bucket}` и доли 90+ в `/summary`.
+- `/summary` — новые метрики клиентской базы: `new_paid_prev_month`,
+  `new_paid_curr_month`, `stopped_since_year_start`, `churn_rate`.
+
+**Frontend:**
+- Плитки MRR факт и Сбор — месяц в названии; окрас по шкале процента
+  (<30 красный / 30-50 оранжевый / 50-80 жёлтый / 80-100 зелёный) — компонент `KpiTile`.
+- Блок «Клиентская база» — отдельные карточки (активные, новые за прошлый/текущий
+  месяц, отток с начала года, churn rate); KPI сгруппированы «Финансы» / «Клиентская база».
+- График «Собираемость по месяцам» — фильтр по годам (`Select`).
+- На каждой плитке всплывающая подсказка (директива PrimeVue `Tooltip`): что
+  показывает метрика и как реагировать на отклонения.
+
+**Документация:** памятка `dashboard-metrics.md` переписана под новые изменения (R10),
+добавлена в `agent_docs/index.md`.
+
+**Тесты:** backend 162 → **164 passed**, 9 skipped (тесты aging обновлены под новую
+логику + тест метрик клиентской базы). Frontend: `vue-tsc` чисто, build успешен.
+ruff чисто.
+
+**Деплой:** выполнен на production 2026-05-19 (`ceo.pass24pro.ru`). Проверка в
+браузере: корзины «Структуры долга» суммируются в 5,6 млн ₽ = плитка ДОЛГ (было
+~37 млн); счётчики корзин не пересекаются; новые плитки и подсказки отображаются.
+
+**Следующий шаг:** наблюдение. Возможный follow-up — выровнять aging на экране
+«Должники» и в модуле «Отчёты» под ту же календарную логику (сейчас там debt/АП).
