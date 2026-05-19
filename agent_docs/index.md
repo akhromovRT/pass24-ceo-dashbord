@@ -36,6 +36,7 @@
 - `agent_docs/guides/runbook.md` — операционный runbook production-сервера.
 - `agent_docs/guides/import-accountant.md` — инструкция для бухгалтера: импорт выгрузок 1С (оплаты ежедневно, долги еженедельно) и где проверять результат.
 - `agent_docs/guides/dashboard-metrics.md` — памятка для сотрудников: что означает каждый показатель раздела Dashboard и как его анализировать.
+- `agent_docs/guides/dashboard-howto.md` — практическая инструкция: как пользоваться дашбордом, на что смотреть, ежедневный чек-лист (опубликована в чате «Бухгалтерия» Bitrix24).
 
 ## Шаблоны
 - `agent_docs/templates/architecture.md`
