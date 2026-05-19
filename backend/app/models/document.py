@@ -27,4 +27,5 @@ class Document(SQLModel, table=True):
     period_month: int | None = None
     import_run_id: uuid.UUID | None = Field(default=None, foreign_key="import_runs.id")
     raw_name: str | None = None
+    period_manual: bool = Field(default=False)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

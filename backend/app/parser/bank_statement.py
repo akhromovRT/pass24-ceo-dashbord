@@ -46,6 +46,7 @@ class PaymentInfo:
     periods: list = field(default_factory=list)  # list[(year, month)]
     coverage_months: int | None = None
     payment_kind: str = "subscription"
+    period_manual: bool = False
 
 
 @dataclass
