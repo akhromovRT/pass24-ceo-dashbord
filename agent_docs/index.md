@@ -35,6 +35,7 @@
 - `agent_docs/guides/archiving-and-temp.md` — архивация и временные файлы.
 - `agent_docs/guides/runbook.md` — операционный runbook production-сервера.
 - `agent_docs/guides/import-accountant.md` — инструкция для бухгалтера: импорт выгрузок 1С (оплаты ежедневно, долги еженедельно) и где проверять результат.
+- `agent_docs/guides/dashboard-metrics.md` — памятка для сотрудников: что означает каждый показатель раздела Dashboard и как его анализировать.
 
 ## Шаблоны
 - `agent_docs/templates/architecture.md`
