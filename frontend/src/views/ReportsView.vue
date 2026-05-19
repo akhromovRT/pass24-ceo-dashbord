@@ -464,9 +464,10 @@ onMounted(() => {
 <style scoped>
 .reports-view {
   box-sizing: border-box;
-  /* высота окна — отчёт умещается на одной странице, таблица заполняет
-     остаток и скроллится внутри себя, страница не прокручивается */
+  /* высота окна + overflow:hidden — отчёт всегда умещается на одной странице,
+     страница не прокручивается ни по вертикали, ни по горизонтали */
   height: 100vh;
+  overflow: hidden;
   min-width: 0;
   padding: 1.5rem;
   display: flex;
@@ -502,6 +503,10 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 1.25rem;
+  /* на низком окне панель критериев скроллится внутри себя,
+     а не выталкивает страницу */
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .criteria-grid {
@@ -560,8 +565,10 @@ onMounted(() => {
 }
 
 .report-table {
+  /* таблица сохраняет рабочую высоту; при нехватке места сжимается панель
+     критериев, а не таблица */
   flex: 1;
-  min-height: 0;
+  min-height: 240px;
   min-width: 0;
   background: white;
   border-radius: 8px;
