@@ -48,3 +48,29 @@ def test_payment_kind_subscription():
 def test_payment_kind_other():
     r = extract_periods("Оплата за оборудование и монтаж", date(2026, 3, 1))
     assert r.payment_kind == "other"
+
+
+def test_dot_format_period():
+    """ЗА 05.2026Г — формат с точкой, встречается в реальных выписках."""
+    r = extract_periods(
+        'ОПЛАТА ПО СЧЁТУ № БП-546 ОТ 20.04.2026 ЗА ДОСТУП НА МЕСЯЦ К СИСТЕМЕ "PASS24.ONLINE" ТАРИФ БИЗНЕС ЗА 05.2026Г.',
+        date(2026, 5, 6),
+    )
+    assert (2026, 5) in r.periods
+
+
+def test_dot_format_not_match_ddmmyyyy():
+    """Дата 20.04.2026 внутри фразы не должна давать ложный период."""
+    r = extract_periods("ОТ 20.04.2026 ГОДА без явного периода", date(2026, 5, 6))
+    # 04 окружён точками с обеих сторон — lookbehind/lookahead блокируют
+    assert (2026, 4) not in r.periods
+
+
+def test_dot_format_not_match_contract_number():
+    """Номер документа 'Д-БП.05.2024' — перед 05 стоит точка,
+    lookbehind _DOT_RE блокирует ложный период."""
+    r = extract_periods(
+        "ОПЛАТА ПО ДОГОВОРУ Д-БП.05.2024 ЗА УСЛУГИ",
+        date(2026, 5, 6),
+    )
+    assert (2024, 5) not in r.periods

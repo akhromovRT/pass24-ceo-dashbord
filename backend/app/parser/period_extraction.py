@@ -14,6 +14,11 @@ def _max_year() -> int:
 # даты внутри номеров договоров ("1083-09/2020").
 _SLASH_RE = re.compile(r"(?<![\d/\-.])(\d{1,2})\s*/\s*(20\d{2})(?![\d/])")
 
+# Формат "MM.YYYY" с точкой: "ЗА 05.2026Г"
+# Lookbehind (?<![\d/\-.]) — не матчим внутри "20.04.2026" (перед 04 стоит точка)
+# Lookahead (?![\d/.]) — не матчим внутри цепочек дат
+_DOT_RE = re.compile(r"(?<![\d/\-.])(\d{1,2})\s*\.\s*(20\d{2})(?![\d/.])")
+
 _MONTHS = {
     "январ": 1, "феврал": 2, "март": 3, "апрел": 4, "мая": 5, "май": 5,
     "мае": 5, "июн": 6, "июл": 7, "август": 8, "сентябр": 9,
@@ -66,6 +71,12 @@ def extract_periods(description: str, doc_date: date) -> ExtractedPeriods:
 
     # Slash-формат "03/2026"
     for m in _SLASH_RE.finditer(text):
+        month, year = int(m.group(1)), int(m.group(2))
+        if _valid(year, month):
+            found.add((year, month))
+
+    # Точечный формат "05.2026" / "05.2026Г"
+    for m in _DOT_RE.finditer(text):
         month, year = int(m.group(1)), int(m.group(2))
         if _valid(year, month):
             found.add((year, month))
