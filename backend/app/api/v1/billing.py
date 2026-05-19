@@ -6,22 +6,13 @@ from sqlmodel import Session, func, select
 from app.api.v1.auth import get_current_user
 from app.core.database import get_session
 from app.models import DocType, Document, Organization
+from app.services.aging import aging_index
 
 router = APIRouter(
     prefix="/billing",
     tags=["billing"],
     dependencies=[Depends(get_current_user)],
 )
-
-
-def _aging_bucket(months: float) -> str:
-    if months <= 1:
-        return "0-30"
-    if months <= 2:
-        return "31-60"
-    if months <= 3:
-        return "61-90"
-    return "90+"
 
 
 @router.get("/debtors")
@@ -39,11 +30,12 @@ def list_debtors(
         .order_by(Organization.total_debt.desc())  # type: ignore[union-attr]
     )
     debtors = session.exec(query).all()
+    aging = aging_index(session)  # возраст долга — по календарным месяцам
     out = []
     for o in debtors:
         debt = float(o.total_debt or 0)
         monthly = float(o.monthly_ap or 0)
-        months = debt / monthly if monthly > 0 else 999.0
+        bucket, age = aging.get(o.id, ("90+", None))
         out.append({
             "id": str(o.id), "inn": o.inn,
             "name": o.name_display or o.name_1c,
@@ -52,8 +44,8 @@ def list_debtors(
             "payment_score": o.payment_score,
             "status": o.status,
             "manager_id": str(o.manager_id) if o.manager_id else None,
-            "months_overdue": round(months, 1) if monthly > 0 else None,
-            "aging_bucket": _aging_bucket(months),
+            "months_overdue": age,
+            "aging_bucket": bucket,
         })
     return out
 

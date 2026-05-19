@@ -22,6 +22,7 @@ from app.models import (
     PaymentAllocation,
     User,
 )
+from app.services.aging import aging_index
 
 # --- критерии ---------------------------------------------------------------
 
@@ -110,17 +111,6 @@ def _parse_month(value: str | None) -> tuple[int, int] | None:
     except (ValueError, AttributeError):
         pass
     return None
-
-
-def _aging_bucket(months: float) -> str:
-    """Корзина просрочки по отношению долг/АП — зеркало billing._aging_bucket."""
-    if months <= 1:
-        return "0-30"
-    if months <= 2:
-        return "31-60"
-    if months <= 3:
-        return "61-90"
-    return "90+"
 
 
 def _filter_orgs(session: Session, c: ReportCriteria) -> list[Organization]:
@@ -251,18 +241,17 @@ def build_debtors_report(session: Session, c: ReportCriteria) -> list[dict]:
     ledger = _load_ledger(session, org_ids)
     last_pay = _last_payments(session, org_ids)
     managers = _managers(session)
+    aging = aging_index(session)  # возраст долга — по календарным месяцам
 
     rows: list[dict] = []
     for o in orgs:
         debt = _f(o.total_debt)
         monthly = _f(o.monthly_ap)
-        months = debt / monthly if monthly > 0 else 999.0
-        bucket = _aging_bucket(months)
+        bucket, age_m = aging.get(o.id, ("90+", 3))
         if c.aging_buckets and bucket not in c.aging_buckets:
             continue
         score = o.payment_score if o.payment_score is not None else 50
-        age = months if monthly > 0 else 0.0
-        priority = debt * (1 + min(age, 12) * 0.15) * (0.3 + 0.7 * score / 100)
+        priority = debt * (1 + min(age_m, 12) * 0.15) * (0.3 + 0.7 * score / 100)
         lp = last_pay.get(o.id)
         rows.append({
             "name": o.name_display or o.name_1c,
@@ -270,7 +259,7 @@ def build_debtors_report(session: Session, c: ReportCriteria) -> list[dict]:
             "manager": managers.get(o.manager_id, "—"),
             "monthly_ap": round(monthly, 2) if monthly else None,
             "total_debt": round(debt, 2),
-            "months_overdue": round(months, 1) if monthly > 0 else None,
+            "months_overdue": age_m,
             "aging_bucket": bucket,
             "last_payment_date": lp.isoformat() if lp else None,
             "collectability": _collectability(ledger.get(o.id, []), pf, pt, cur),

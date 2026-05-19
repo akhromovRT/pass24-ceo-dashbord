@@ -23,6 +23,7 @@ from app.models import (
     OrgStatus,
     PaymentAllocation,
 )
+from app.services.aging import debt_aging
 
 router = APIRouter(
     prefix="/dashboard", tags=["dashboard"],
@@ -90,71 +91,6 @@ def _collected_by_charge_month(session: Session) -> dict[tuple[int, int], float]
         .group_by(MonthlyCharge.year, MonthlyCharge.month)
     ).all()
     return {(int(y), int(m)): _f(s) for y, m, s in rows}
-
-
-def _ledger_outstanding(session: Session) -> dict:
-    """{org_id: {(year, month): outstanding}} — непокрытый остаток начислений
-    для неисключённых клиентов."""
-    charges = session.exec(
-        select(MonthlyCharge)
-        .join(Organization, Organization.id == MonthlyCharge.organization_id)
-        .where(_excl())
-    ).all()
-    alloc_rows = session.exec(
-        select(PaymentAllocation.monthly_charge_id,
-               func.coalesce(func.sum(PaymentAllocation.allocated_amount), 0))
-        .where(PaymentAllocation.monthly_charge_id.is_not(None))  # type: ignore[union-attr]
-        .group_by(PaymentAllocation.monthly_charge_id)
-    ).all()
-    allocated = {cid: _f(s) for cid, s in alloc_rows}
-    out: dict = {}
-    for c in charges:
-        left = _f(c.amount) - allocated.get(c.id, 0.0)
-        out.setdefault(c.organization_id, {})[(c.year, c.month)] = left
-    return out
-
-
-def _age_bucket(age_months: int) -> str:
-    if age_months <= 0:
-        return "0-30"
-    if age_months == 1:
-        return "31-60"
-    if age_months == 2:
-        return "61-90"
-    return "90+"
-
-
-def _debt_aging(session: Session) -> list[tuple]:
-    """Структура долга: каждый клиент с долгом по 1С попадает РОВНО в одну
-    корзину. Возраст долга — число календарных месяцев от самого раннего
-    неоплаченного начисления леджера (АП начисляется 1-го числа месяца).
-    Сумма в корзине — долг клиента из 1С (`total_debt`), поэтому итог по
-    корзинам сходится с плиткой ДОЛГ. Возвращает [(org, bucket, age, debt)]."""
-    today = date.today()
-    cur_idx = today.year * 12 + today.month
-    debtors = session.exec(
-        select(Organization).where(
-            _excl(),
-            Organization.total_debt.is_not(None),  # type: ignore[union-attr]
-            Organization.total_debt > 0,  # type: ignore[operator]
-        )
-    ).all()
-    outstanding = _ledger_outstanding(session)
-    rows: list[tuple] = []
-    for o in debtors:
-        periods = outstanding.get(o.id, {})
-        unpaid = [(y, m) for (y, m), left in periods.items()
-                  if left > 0.01 and y * 12 + m <= cur_idx]
-        if unpaid:
-            oy, om = min(unpaid)
-            age = cur_idx - (oy * 12 + om)
-        else:
-            # 1С показывает долг, но непокрытых начислений в леджере нет —
-            # оцениваем возраст по отношению долг/АП
-            monthly = _f(o.monthly_ap)
-            age = int(_f(o.total_debt) / monthly) if monthly > 0 else 3
-        rows.append((o, _age_bucket(age), age, _f(o.total_debt)))
-    return rows
 
 
 # --- эндпоинты --------------------------------------------------------------
@@ -281,7 +217,7 @@ def dashboard_summary(session: Session = Depends(get_session)):
 
     # доля корзины 90+ — из той же логики, что и график «Структура долга»
     debt_90plus = sum(
-        debt for _o, bucket, _age, debt in _debt_aging(session)
+        debt for _o, bucket, _age, debt in debt_aging(session)
         if bucket == "90+"
     )
     debt_90plus_share = round(debt_90plus / total_debt * 100, 1) if total_debt else 0.0
@@ -466,7 +402,7 @@ def aging_buckets(session: Session = Depends(get_session)):
     одной корзине; сумма корзин равна суммарному долгу (плитка ДОЛГ)."""
     buckets = {"0-30": [0.0, 0], "31-60": [0.0, 0],
                "61-90": [0.0, 0], "90+": [0.0, 0]}
-    for _o, bucket, _age, debt in _debt_aging(session):
+    for _o, bucket, _age, debt in debt_aging(session):
         buckets[bucket][0] += debt
         buckets[bucket][1] += 1
     return [
@@ -480,7 +416,7 @@ def aging_bucket_detail(bucket: str, session: Session = Depends(get_session)):
     if bucket not in ("0-30", "31-60", "61-90", "90+"):
         raise HTTPException(status_code=400, detail="invalid bucket")
     rows = []
-    for o, b, age, debt in _debt_aging(session):
+    for o, b, age, debt in debt_aging(session):
         if b != bucket:
             continue
         rows.append({
