@@ -124,6 +124,39 @@ def _age_bucket(age_months: int) -> str:
     return "90+"
 
 
+def _debt_aging(session: Session) -> list[tuple]:
+    """Структура долга: каждый клиент с долгом по 1С попадает РОВНО в одну
+    корзину. Возраст долга — число календарных месяцев от самого раннего
+    неоплаченного начисления леджера (АП начисляется 1-го числа месяца).
+    Сумма в корзине — долг клиента из 1С (`total_debt`), поэтому итог по
+    корзинам сходится с плиткой ДОЛГ. Возвращает [(org, bucket, age, debt)]."""
+    today = date.today()
+    cur_idx = today.year * 12 + today.month
+    debtors = session.exec(
+        select(Organization).where(
+            _excl(),
+            Organization.total_debt.is_not(None),  # type: ignore[union-attr]
+            Organization.total_debt > 0,  # type: ignore[operator]
+        )
+    ).all()
+    outstanding = _ledger_outstanding(session)
+    rows: list[tuple] = []
+    for o in debtors:
+        periods = outstanding.get(o.id, {})
+        unpaid = [(y, m) for (y, m), left in periods.items()
+                  if left > 0.01 and y * 12 + m <= cur_idx]
+        if unpaid:
+            oy, om = min(unpaid)
+            age = cur_idx - (oy * 12 + om)
+        else:
+            # 1С показывает долг, но непокрытых начислений в леджере нет —
+            # оцениваем возраст по отношению долг/АП
+            monthly = _f(o.monthly_ap)
+            age = int(_f(o.total_debt) / monthly) if monthly > 0 else 3
+        rows.append((o, _age_bucket(age), age, _f(o.total_debt)))
+    return rows
+
+
 # --- эндпоинты --------------------------------------------------------------
 
 @router.get("/summary")
@@ -198,24 +231,59 @@ def dashboard_summary(session: Session = Depends(get_session)):
     ).all())
     churned_60d = sum(1 for oid in paying_active if oid not in recently_paid_ids)
 
+    # --- метрики клиентской базы --------------------------------------------
+    year_start = date(today.year, 1, 1)
+    first_pay_rows = session.exec(
+        select(Document.organization_id, func.min(Document.doc_date))
+        .select_from(Document)
+        .join(Organization, Organization.id == Document.organization_id)
+        .where(_excl(), Document.doc_type == DocType.PAYMENT,
+               Document.doc_date.is_not(None))  # type: ignore[union-attr]
+        .group_by(Document.organization_id)
+    ).all()
+    last_pay_rows = session.exec(
+        select(Document.organization_id, func.max(Document.doc_date))
+        .select_from(Document)
+        .join(Organization, Organization.id == Document.organization_id)
+        .where(_excl(), Document.doc_type == DocType.PAYMENT,
+               Document.doc_date.is_not(None))  # type: ignore[union-attr]
+        .group_by(Document.organization_id)
+    ).all()
+    new_paid_prev_month = sum(
+        1 for _oid, d in first_pay_rows
+        if d is not None and d.year == prev_y and d.month == prev_m
+    )
+    new_paid_curr_month = sum(
+        1 for _oid, d in first_pay_rows
+        if d is not None and d.year == today.year and d.month == today.month
+    )
+    # перестали платить с начала года: последний платёж в этом году, >60 дней назад
+    stopped_since_year_start = sum(
+        1 for _oid, d in last_pay_rows
+        if d is not None and year_start <= d <= cutoff_60
+    )
+    # база для churn rate — клиенты, у которых был платёж в прошлом году
+    paying_base = session.exec(
+        select(func.count()).select_from(
+            select(Document.organization_id).distinct()
+            .join(Organization, Organization.id == Document.organization_id)
+            .where(_excl(), Document.doc_type == DocType.PAYMENT,
+                   func.extract("year", Document.doc_date) == today.year - 1)
+            .subquery()
+        )
+    ).one()
+    churn_rate = (round(stopped_since_year_start / paying_base * 100, 1)
+                  if paying_base else None)
+
     # текущий (незакрытый) месяц — собрано за период из леджера
     cur_collected = collected.get((today.year, today.month), 0.0)
     days_in_month = calendar.monthrange(today.year, today.month)[1]
 
-    # доля корзины 90+ (по 1С total_debt)
-    debt_90plus = 0.0
-    orgs_debt = session.exec(
-        select(Organization).where(
-            _excl(),
-            Organization.total_debt.is_not(None),  # type: ignore[union-attr]
-            Organization.total_debt > 0,  # type: ignore[operator]
-        )
-    ).all()
-    for o in orgs_debt:
-        d = _f(o.total_debt)
-        monthly = _f(o.monthly_ap) or 1
-        if (d / monthly if monthly > 0 else 999) > 3:
-            debt_90plus += d
+    # доля корзины 90+ — из той же логики, что и график «Структура долга»
+    debt_90plus = sum(
+        debt for _o, bucket, _age, debt in _debt_aging(session)
+        if bucket == "90+"
+    )
     debt_90plus_share = round(debt_90plus / total_debt * 100, 1) if total_debt else 0.0
 
     prev_accrued = accrued.get((prev_y, prev_m), 0.0)
@@ -231,6 +299,10 @@ def dashboard_summary(session: Session = Depends(get_session)):
         "new_30d": new_30d,
         "new_90d": new_90d,
         "churned_60d": churned_60d,
+        "new_paid_prev_month": new_paid_prev_month,
+        "new_paid_curr_month": new_paid_curr_month,
+        "stopped_since_year_start": stopped_since_year_start,
+        "churn_rate": churn_rate,
         "mom_mrr_delta_pct": mom_pct,
         "fact_month": f"{prev_y}-{prev_m:02d}",
         "mrr": round(fact_mrr, 2),
@@ -390,23 +462,15 @@ def attention(session: Session = Depends(get_session)):
 
 @router.get("/aging")
 def aging_buckets(session: Session = Depends(get_session)):
-    """Просрочка по возрасту непокрытых начислений леджера."""
-    today = date.today()
-    cur = today.year * 12 + today.month
-    buckets = {"0-30": [0.0, set()], "31-60": [0.0, set()],
-               "61-90": [0.0, set()], "90+": [0.0, set()]}
-    for org_id, periods in _ledger_outstanding(session).items():
-        for (y, m), left in periods.items():
-            if left <= 0:
-                continue
-            age = cur - (y * 12 + m)
-            if age < 0:
-                continue
-            key = _age_bucket(age)
-            buckets[key][0] += left
-            buckets[key][1].add(org_id)
+    """Структура долга по возрасту. Каждый клиент с долгом по 1С — ровно в
+    одной корзине; сумма корзин равна суммарному долгу (плитка ДОЛГ)."""
+    buckets = {"0-30": [0.0, 0], "31-60": [0.0, 0],
+               "61-90": [0.0, 0], "90+": [0.0, 0]}
+    for _o, bucket, _age, debt in _debt_aging(session):
+        buckets[bucket][0] += debt
+        buckets[bucket][1] += 1
     return [
-        {"bucket": k, "amount": round(v[0], 2), "count": len(v[1])}
+        {"bucket": k, "amount": round(v[0], 2), "count": v[1]}
         for k, v in buckets.items()
     ]
 
@@ -415,39 +479,16 @@ def aging_buckets(session: Session = Depends(get_session)):
 def aging_bucket_detail(bucket: str, session: Session = Depends(get_session)):
     if bucket not in ("0-30", "31-60", "61-90", "90+"):
         raise HTTPException(status_code=400, detail="invalid bucket")
-    today = date.today()
-    cur = today.year * 12 + today.month
-    org_amount: dict = {}
-    org_max_age: dict = {}
-    for org_id, periods in _ledger_outstanding(session).items():
-        for (y, m), left in periods.items():
-            if left <= 0:
-                continue
-            age = cur - (y * 12 + m)
-            if age < 0 or _age_bucket(age) != bucket:
-                continue
-            org_amount[org_id] = org_amount.get(org_id, 0.0) + left
-            org_max_age[org_id] = max(org_max_age.get(org_id, 0), age)
-    if not org_amount:
-        return []
-    orgs = {
-        o.id: o for o in session.exec(
-            select(Organization).where(
-                Organization.id.in_(list(org_amount))  # type: ignore[union-attr]
-            )
-        ).all()
-    }
     rows = []
-    for org_id, amt in org_amount.items():
-        o = orgs.get(org_id)
-        if o is None:
+    for o, b, age, debt in _debt_aging(session):
+        if b != bucket:
             continue
         rows.append({
             "inn": o.inn,
             "name": o.name_display or o.name_1c,
             "monthly_ap": _f(o.monthly_ap),
-            "total_debt": round(amt, 2),
-            "months_overdue": org_max_age[org_id],
+            "total_debt": round(debt, 2),
+            "months_overdue": age,
             "status": o.status,
         })
     rows.sort(key=lambda r: -r["total_debt"])

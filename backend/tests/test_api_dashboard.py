@@ -16,8 +16,8 @@ from app.models import (
     AllocationBasis,
     ChargeSource,
     Contract,
-    Document,
     DocType,
+    Document,
     MonthlyCharge,
     Organization,
     OrgStatus,
@@ -45,7 +45,7 @@ def client(db_session: Session):
 def _make_ledger_org(db_session: Session) -> Organization:
     """Орг с начислением 01/2026 (10000) и платежом 8000, разнесённым на него."""
     org = Organization(inn="7700000001", name_1c="Орг", status=OrgStatus.ACTIVE,
-                        monthly_ap=Decimal("10000"))
+                        monthly_ap=Decimal("10000"), total_debt=Decimal("2000"))
     db_session.add(org)
     db_session.flush()
     contract = Contract(organization_id=org.id, contract_number="1C-PAYMENTS",
@@ -98,12 +98,37 @@ def test_cash_inflow_structure(client, db_session: Session):
         assert key in rows[0]
 
 
-def test_aging_from_ledger(client, db_session: Session):
-    _make_ledger_org(db_session)  # начислено 10000, разнесено 8000 → остаток 2000
+def test_aging_sum_matches_total_debt(client, db_session: Session):
+    """Сумма корзин «Структуры долга» = суммарный долг из 1С (плитка ДОЛГ)."""
+    _make_ledger_org(db_session)  # total_debt 2000, неоплаченное начисление 01/2026
     resp = client.get("/api/v1/dashboard/aging")
     assert resp.status_code == 200
     rows = resp.json()
     assert sum(r["amount"] for r in rows) == pytest.approx(2000.0)
+    by_bucket = {r["bucket"]: r for r in rows}
+    # начисление 01/2026 старше 3 месяцев → клиент в корзине 90+
+    assert by_bucket["90+"]["amount"] == pytest.approx(2000.0)
+    assert by_bucket["90+"]["count"] == 1
+
+
+def test_aging_buckets_non_overlapping(client, db_session: Session):
+    """Каждый клиент-должник попадает ровно в одну корзину."""
+    _make_ledger_org(db_session)  # → корзина 90+
+    today = date.today()
+    org2 = Organization(inn="7700000099", name_1c="Свежий долг",
+                        status=OrgStatus.ACTIVE, monthly_ap=Decimal("10000"),
+                        total_debt=Decimal("5000"))
+    db_session.add(org2)
+    db_session.flush()
+    db_session.add(MonthlyCharge(
+        organization_id=org2.id, year=today.year, month=today.month,
+        amount=Decimal("10000"), source=ChargeSource.SYNTHETIC_TARIFF))
+    db_session.commit()
+    rows = client.get("/api/v1/dashboard/aging").json()
+    assert sum(r["count"] for r in rows) == 2  # 2 должника, без двойного счёта
+    assert sum(r["amount"] for r in rows) == pytest.approx(7000.0)
+    by_bucket = {r["bucket"]: r for r in rows}
+    assert by_bucket["0-30"]["count"] == 1  # начисление текущего месяца
 
 
 def test_summary_has_current_month_fields(client, db_session: Session):
@@ -117,6 +142,15 @@ def test_summary_has_current_month_fields(client, db_session: Session):
                 "collection_rate_fact"):
         assert key in body
     assert 1 <= body["days_in_month"] <= 31
+
+
+def test_summary_client_base_metrics(client, db_session: Session):
+    """summary отдаёт метрики клиентской базы (новые плательщики, отток, churn)."""
+    _make_ledger_org(db_session)
+    body = client.get("/api/v1/dashboard/summary").json()
+    for key in ("new_paid_prev_month", "new_paid_curr_month",
+                "stopped_since_year_start", "churn_rate"):
+        assert key in body
 
 
 def test_attention_aggregates_open_alerts(client, db_session: Session):

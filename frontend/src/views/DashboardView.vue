@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import Select from 'primevue/select'
 import VChart from 'vue-echarts'
 import { use } from 'echarts/core'
 import { BarChart, LineChart } from 'echarts/charts'
@@ -26,6 +27,7 @@ const trend = ref<any[]>([])
 const aging = ref<any[]>([])
 const attention = ref<any[]>([])
 const cashInflow = ref<any[]>([])
+const selectedYear = ref<number | 'all'>('all')
 
 onMounted(async () => {
   const [s, t, a, at, ci] = await Promise.all([
@@ -40,7 +42,41 @@ onMounted(async () => {
   aging.value = a.data
   attention.value = at.data
   cashInflow.value = ci.data
+  // по умолчанию — текущий год, чтобы график был читаемым
+  const years = trend.value.map((r: any) => r.year)
+  selectedYear.value = years.length ? Math.max(...years) : 'all'
 })
+
+// --- описания метрик (всплывают при наведении на плитку) --------------------
+const HINTS: Record<string, string> = {
+  mrrFact: 'Сколько абонплаты собрали за последний закрытый месяц. ' +
+    'Норма для компании — 90%+. Ниже нормы — усилить взыскание, ' +
+    'разобрать крупных неплательщиков в разделе «Должники».',
+  mrrPlan: 'Сколько абонплаты должно приходить в месяц при 100% оплате ' +
+    '(сумма АП активных клиентов). Снижение — отток клиентов или урезание тарифов.',
+  sbor: 'Сколько собрано за текущий, ещё не закрытый месяц. Сравнивайте ' +
+    '% сбора с долей прошедших дней: отставание = риск недосбора к концу месяца.',
+  debt: 'Сумма к взысканию по данным 1С. Рост долга и высокая доля 90+ — ' +
+    'сигнал активизировать взыскание. Клик по графику ниже открывает список.',
+  active: 'Сколько клиентов в статусе «Активен» — это база регулярной выручки.',
+  newPrev: 'Сколько клиентов впервые заплатили в прошлом (закрытом) месяце.',
+  newCurr: 'Сколько клиентов впервые заплатили в текущем месяце (месяц ещё идёт).',
+  stopped: 'Сколько клиентов перестали платить с начала года: последний платёж ' +
+    'был в этом году, но более 60 дней назад. Рост — повод разобрать причины ухода.',
+  churn: 'Доля оттока: ушедшие с начала года ÷ клиенты с платежами в прошлом году. ' +
+    'Чем выше — тем больше теряем базу; разбирать причины и удерживать клиентов.',
+}
+
+const RU_MONTHS = [
+  'январь', 'февраль', 'март', 'апрель', 'май', 'июнь',
+  'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь',
+]
+function ruMonth(label: string | null | undefined): string {
+  if (!label) return ''
+  const [y, m] = label.split('-').map(Number)
+  if (!y || !m) return label
+  return `${RU_MONTHS[m - 1]} ${y}`
+}
 
 function fmt(value: number | null, digits = 0) {
   if (value == null) return '—'
@@ -62,12 +98,28 @@ const currentMonthPct = computed(() => {
   return Math.round(summary.value.current_month_collected / summary.value.mrr_plan * 100)
 })
 
-const hasTrend = computed(() => trend.value.length > 0)
+// --- график собираемости: фильтр по годам -----------------------------------
+const yearOptions = computed(() => {
+  const ys = [...new Set(trend.value.map((r: any) => r.year))].sort(
+    (a, b) => (b as number) - (a as number),
+  )
+  return [
+    { label: 'Все годы', value: 'all' as const },
+    ...ys.map(y => ({ label: String(y), value: y as number })),
+  ]
+})
+const filteredTrend = computed(() =>
+  selectedYear.value === 'all'
+    ? trend.value
+    : trend.value.filter((r: any) => r.year === selectedYear.value),
+)
+
+const hasTrend = computed(() => filteredTrend.value.length > 0)
 const collectionChartOption = computed(() => ({
   tooltip: {
     trigger: 'axis',
     formatter: (params: any[]) => {
-      const row = trend.value[params[0].dataIndex] || {}
+      const row = filteredTrend.value[params[0].dataIndex] || {}
       const tail = row.is_current_month ? '<br><i>месяц не закрыт</i>' : ''
       return `<b>${row.label}</b><br>Начислено: <b>${fmtRub(row.accrued)}</b><br>` +
              `Собрано: <b>${fmtRub(row.collected)}</b><br>` +
@@ -78,7 +130,7 @@ const collectionChartOption = computed(() => ({
   grid: { left: 64, right: 24, top: 36, bottom: 28 },
   xAxis: {
     type: 'category',
-    data: trend.value.map(s => s.label),
+    data: filteredTrend.value.map(s => s.label),
     axisLabel: { fontSize: 11 },
   },
   yAxis: {
@@ -89,7 +141,7 @@ const collectionChartOption = computed(() => ({
     {
       name: 'Начислено',
       type: 'line',
-      data: trend.value.map(s => s.accrued),
+      data: filteredTrend.value.map(s => s.accrued),
       lineStyle: { type: 'dashed', color: '#94a3b8', width: 2 },
       itemStyle: { color: '#94a3b8' },
       symbol: 'none',
@@ -97,7 +149,7 @@ const collectionChartOption = computed(() => ({
     {
       name: 'Собрано',
       type: 'bar',
-      data: trend.value.map(s => ({
+      data: filteredTrend.value.map(s => ({
         value: s.collected,
         itemStyle: {
           color: s.is_current_month ? '#cbd5e1'
@@ -163,47 +215,99 @@ function onAgingClick(event: any) {
     <div class="dash-header">
       <h1>Аналитика CEO</h1>
       <div class="period-label" v-if="summary?.fact_month">
-        Факт за месяц: <b>{{ summary.fact_month }}</b>
+        Факт за месяц: <b>{{ ruMonth(summary.fact_month) }}</b>
       </div>
     </div>
 
-    <div class="kpi-grid" v-if="summary">
-      <KpiTile
-        label="MRR факт"
-        :value="fmtRub(summary.mrr_fact)"
-        :sub="summary.collection_rate_fact != null
-          ? `собрано ${summary.collection_rate_fact}% от плана` : ''"
-        accent="primary"
-      />
-      <KpiTile
-        label="MRR план"
-        :value="fmtRub(summary.mrr_plan)"
-        sub="база подписки"
-        accent="neutral"
-      />
-      <KpiTile
-        :label="`Сбор: ${summary.current_month_label}`"
-        :value="fmtRub(summary.current_month_collected)"
-        :sub="`${currentMonthPct ?? '—'}% плана · день ${summary.days_passed}/${summary.days_in_month}`"
-        accent="warn"
-      />
-      <KpiTile
-        label="Долг"
-        :value="fmtRub(summary.total_debt)"
-        :sub="`90+: ${fmtRub(summary.debt_90plus_amount)} (${summary.debt_90plus_share}%)`"
-        accent="danger"
-      />
-      <KpiTile
-        label="Активные клиенты"
-        :value="fmt(summary.active_clients)"
-        :sub="`+${summary.new_30d} за 30 дней`"
-        accent="success"
-      />
-    </div>
+    <section class="kpi-section" v-if="summary">
+      <div class="kpi-section-title">Финансы</div>
+      <div class="kpi-grid kpi-grid-4">
+        <KpiTile
+          :label="`MRR факт · ${ruMonth(summary.fact_month)}`"
+          :value="fmtRub(summary.mrr_fact)"
+          :sub="summary.collection_rate_fact != null
+            ? `собрано ${summary.collection_rate_fact}% от плана · норма 90%` : ''"
+          :pct="summary.collection_rate_fact"
+          :hint="HINTS.mrrFact"
+          accent="primary"
+        />
+        <KpiTile
+          label="MRR план"
+          :value="fmtRub(summary.mrr_plan)"
+          sub="база подписки"
+          :hint="HINTS.mrrPlan"
+          accent="neutral"
+        />
+        <KpiTile
+          :label="`Сбор · ${ruMonth(summary.current_month_label)} (текущий)`"
+          :value="fmtRub(summary.current_month_collected)"
+          :sub="`${currentMonthPct ?? '—'}% плана · день ${summary.days_passed}/${summary.days_in_month}`"
+          :pct="currentMonthPct"
+          :hint="HINTS.sbor"
+        />
+        <KpiTile
+          label="Долг"
+          :value="fmtRub(summary.total_debt)"
+          :sub="`90+: ${fmtRub(summary.debt_90plus_amount)} (${summary.debt_90plus_share}%)`"
+          :hint="HINTS.debt"
+          accent="danger"
+        />
+      </div>
+    </section>
+
+    <section class="kpi-section" v-if="summary">
+      <div class="kpi-section-title">Клиентская база</div>
+      <div class="kpi-grid kpi-grid-5">
+        <KpiTile
+          label="Активные клиенты"
+          :value="fmt(summary.active_clients)"
+          sub="всего в статусе «Активен»"
+          :hint="HINTS.active"
+          accent="success"
+        />
+        <KpiTile
+          :label="`Новые · ${ruMonth(summary.fact_month)}`"
+          :value="fmt(summary.new_paid_prev_month)"
+          sub="впервые заплатили"
+          :hint="HINTS.newPrev"
+          accent="success"
+        />
+        <KpiTile
+          :label="`Новые · ${ruMonth(summary.current_month_label)}`"
+          :value="fmt(summary.new_paid_curr_month)"
+          sub="впервые заплатили · месяц идёт"
+          :hint="HINTS.newCurr"
+          accent="success"
+        />
+        <KpiTile
+          label="Отток с начала года"
+          :value="fmt(summary.stopped_since_year_start)"
+          sub="перестали платить"
+          :hint="HINTS.stopped"
+          accent="danger"
+        />
+        <KpiTile
+          label="Churn rate"
+          :value="summary.churn_rate != null ? `${summary.churn_rate}%` : '—'"
+          sub="доля ушедших за год"
+          :hint="HINTS.churn"
+          accent="warn"
+        />
+      </div>
+    </section>
 
     <div class="charts-row">
       <div class="chart-card">
-        <div class="chart-title">Собираемость по месяцам (собрано за период ÷ начислено)</div>
+        <div class="chart-head">
+          <div class="chart-title">Собираемость по месяцам (собрано за период ÷ начислено)</div>
+          <Select
+            v-model="selectedYear"
+            :options="yearOptions"
+            optionLabel="label"
+            optionValue="value"
+            class="year-select"
+          />
+        </div>
         <v-chart
           v-if="hasTrend"
           :option="collectionChartOption"
@@ -227,6 +331,10 @@ function onAgingClick(event: any) {
           autoresize
           @click="onAgingClick"
         />
+        <div class="chart-legend">
+          Возраст — по календарным месяцам неоплаты. Каждый клиент в одной
+          корзине; сумма корзин равна плитке «Долг».
+        </div>
       </div>
     </div>
 
@@ -261,16 +369,29 @@ function onAgingClick(event: any) {
   color: #64748b;
   font-size: 0.875rem;
 }
+.kpi-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.kpi-section-title {
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #94a3b8;
+}
 .kpi-grid {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
   gap: 0.75rem;
 }
+.kpi-grid-4 { grid-template-columns: repeat(4, 1fr); }
+.kpi-grid-5 { grid-template-columns: repeat(5, 1fr); }
 @media (max-width: 1200px) {
-  .kpi-grid { grid-template-columns: repeat(3, 1fr); }
+  .kpi-grid-4, .kpi-grid-5 { grid-template-columns: repeat(3, 1fr); }
 }
 @media (max-width: 700px) {
-  .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+  .kpi-grid-4, .kpi-grid-5 { grid-template-columns: repeat(2, 1fr); }
 }
 .charts-row {
   display: grid;
@@ -286,11 +407,24 @@ function onAgingClick(event: any) {
   border-radius: 8px;
   padding: 1rem 1.25rem;
 }
+.chart-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 0.5rem;
+}
 .chart-title {
   font-size: 0.95rem;
   font-weight: 600;
   color: #1e293b;
   margin-bottom: 0.5rem;
+}
+.chart-head .chart-title {
+  margin-bottom: 0;
+}
+.year-select {
+  flex-shrink: 0;
 }
 .chart-legend {
   font-size: 0.75rem;
