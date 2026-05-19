@@ -9,15 +9,6 @@
 
 ## Записи
 
-### 2026-03-06 — MVP complete (Tasks 18-25)
-
-**Что сделано:**
-- Tasks 18-25: DashboardView (4 KPI-карточки, MRR-тренд ECharts, aging bar chart), DebtorsView (DataTable с фильтром min_debt), ImportView (drag-and-drop загрузка XLS/XLSX, история импортов), Payment Score расчёт, Sidebar + Layout, Alerts panel
-- Frontend Nginx для production-сборки
-- seed_data.py скрипт для загрузки аналитики поступлений (метаданные объектов, план/факт, адреса)
-
-**Тесты:** 74/74 backend passed. Frontend builds successfully
-
 ### 2026-05-13 — User management feature + akhromov admin + backlog
 
 **Что сделано:**
@@ -320,3 +311,39 @@ ruff чисто.
 `test_api_dashboard.py` — 8 passed. ruff чисто, frontend build (`vue-tsc`) успешен.
 
 **Следующий шаг:** деплой на production, проверка в браузере.
+
+### 2026-05-19 — Ручной ввод периода при импорте платежей (двухфазный импорт)
+
+**Контекст:** часть банковских платежей и платежей из реестра 1С приходит без
+распознаваемого периода в назначении — раньше такие платежи импортировались без
+периода и разносились эвристикой. Нужен шаг ручного указания месяца при импорте.
+
+**Backend:**
+- Парсер периодов (`period_extraction.py`): распознаётся формат `MM.YYYY` с точкой
+  («ЗА 05.2026Г») — `_DOT_RE` с lookbehind/lookahead против ложных матчей внутри дат.
+- Поле `period_manual` добавлено в `PaymentInfo` (dataclass) и `Document` (модель +
+  Alembic-миграция `a2e7c3b1d0f5`, `ADD COLUMN` с `server_default false NOT NULL`).
+- `ImportService.process_bank_import` принимает `period_overrides: dict[int,
+  tuple[int,int]]` (ключ — позиционный индекс платежа в файле), проставляет
+  `period_manual=True` и период; `process_payments_report` пробрасывает оверрайды.
+- `AllocationService`: `Document.period_manual=True` приоритетнее regex из `raw_name`
+  — платёж разносится на указанный месяц (basis `EXPLICIT_PERIOD`). При нарушении
+  инварианта (флаг без года/месяца) — `logger.warning`, без падения пересчёта.
+- API: `POST /import/preview` (фаза 1 — парсит файл, в БД не пишет, отдаёт
+  `file_hash` + платежи без периода) и `POST /import/commit` (фаза 2 — сверяет
+  `file_hash`, применяет оверрайды, пишет в БД). `/import/upload` для debt/registry
+  не затронут.
+
+**Frontend (`ImportView.vue`):** двухфазный поток для bank/payments — после загрузки
+шаг ревью с таблицей платежей без периода и помесячным `DatePicker`. Если все периоды
+распознаны — commit сразу. Заполнение необязательное. debt/registry — прежний upload.
+
+**Тесты:** backend **173 passed**, 5 skipped (было 155 — +18 новых: парсер, import
+service, allocation, API preview/commit). Frontend `vue-tsc` чисто, build успешен.
+
+**Известный нюанс:** оверрайды сопоставляются с платежами по позиционному индексу —
+корректно, т.к. preview и commit парсят один и тот же файл (сверка по `file_hash`),
+порядок платежей детерминирован.
+
+**Следующий шаг:** деплой на production (`ceo.pass24pro.ru`) с применением миграции
+`a2e7c3b1d0f5` — отложен пользователем, выполнить отдельно (Task 7 плана).

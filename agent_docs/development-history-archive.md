@@ -152,3 +152,12 @@ frontend/src/
 ```
 
 **Следующий шаг:** Phase 5 — Tasks 18-19 (Payment Score + DebtorsView)
+
+### 2026-03-06 — MVP complete (Tasks 18-25)
+
+**Что сделано:**
+- Tasks 18-25: DashboardView (4 KPI-карточки, MRR-тренд ECharts, aging bar chart), DebtorsView (DataTable с фильтром min_debt), ImportView (drag-and-drop загрузка XLS/XLSX, история импортов), Payment Score расчёт, Sidebar + Layout, Alerts panel
+- Frontend Nginx для production-сборки
+- seed_data.py скрипт для загрузки аналитики поступлений (метаданные объектов, план/факт, адреса)
+
+**Тесты:** 74/74 backend passed. Frontend builds successfully
