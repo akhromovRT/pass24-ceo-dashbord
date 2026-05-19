@@ -345,5 +345,13 @@ service, allocation, API preview/commit). Frontend `vue-tsc` чисто, build �
 корректно, т.к. preview и commit парсят один и тот же файл (сверка по `file_hash`),
 порядок платежей детерминирован.
 
-**Следующий шаг:** деплой на production (`ceo.pass24pro.ru`) с применением миграции
-`a2e7c3b1d0f5` — отложен пользователем, выполнить отдельно (Task 7 плана).
+**Деплой:** выполнен на production (`ceo.pass24pro.ru`) 2026-05-19. Миграция
+`a2e7c3b1d0f5` применена (`documents.period_manual`), все сервисы `Up (healthy)`,
+эндпоинты `/import/preview` и `/import/commit` отвечают. Нюанс порядка: backend-образ
+собирается без bind-mount исходников (`build: ./backend`), поэтому миграцию нельзя
+применять `docker compose exec` на ещё не пересобранном контейнере. Корректный
+порядок — `build` → `docker compose run --rm backend alembic upgrade head`
+(одноразовый контейнер нового образа) → `up -d`; так нет окна «новый код на старой
+схеме».
+
+**Следующий шаг:** ручная проверка двухфазного импорта в браузере.
