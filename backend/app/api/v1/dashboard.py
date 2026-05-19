@@ -193,6 +193,11 @@ def dashboard_summary(session: Session = Depends(get_session)):
         1 for _oid, d in first_pay_rows
         if d is not None and d.year == today.year and d.month == today.month
     )
+    # новые за год: клиенты, чей первый платёж пришёлся на текущий год
+    new_paid_curr_year = sum(
+        1 for _oid, d in first_pay_rows
+        if d is not None and d.year == today.year
+    )
     # перестали платить с начала года: последний платёж в этом году, >60 дней назад
     stopped_since_year_start = sum(
         1 for _oid, d in last_pay_rows
@@ -237,6 +242,7 @@ def dashboard_summary(session: Session = Depends(get_session)):
         "churned_60d": churned_60d,
         "new_paid_prev_month": new_paid_prev_month,
         "new_paid_curr_month": new_paid_curr_month,
+        "new_paid_curr_year": new_paid_curr_year,
         "stopped_since_year_start": stopped_since_year_start,
         "churn_rate": churn_rate,
         "mom_mrr_delta_pct": mom_pct,

@@ -61,6 +61,8 @@ const HINTS: Record<string, string> = {
   active: 'Сколько клиентов в статусе «Активен» — это база регулярной выручки.',
   newPrev: 'Сколько клиентов впервые заплатили в прошлом (закрытом) месяце.',
   newCurr: 'Сколько клиентов впервые заплатили в текущем месяце (месяц ещё идёт).',
+  newYear: 'Сколько клиентов впервые заплатили с начала текущего года — ' +
+    'приток новой базы за год (число растёт до конца года).',
   stopped: 'Сколько клиентов перестали платить с начала года: последний платёж ' +
     'был в этом году, но более 60 дней назад. Рост — повод разобрать причины ухода.',
   churn: 'Доля оттока: ушедшие с начала года ÷ клиенты с платежами в прошлом году. ' +
@@ -257,12 +259,19 @@ function onAgingClick(event: any) {
 
     <section class="kpi-section" v-if="summary">
       <div class="kpi-section-title">Клиентская база</div>
-      <div class="kpi-grid kpi-grid-5">
+      <div class="kpi-grid kpi-grid-6">
         <KpiTile
           label="Активные клиенты"
           :value="fmt(summary.active_clients)"
           sub="всего в статусе «Активен»"
           :hint="HINTS.active"
+          accent="success"
+        />
+        <KpiTile
+          label="Новые за год"
+          :value="fmt(summary.new_paid_curr_year)"
+          :sub="`впервые заплатили в ${summary.current_month_label?.slice(0, 4)}`"
+          :hint="HINTS.newYear"
           accent="success"
         />
         <KpiTile
@@ -387,11 +396,12 @@ function onAgingClick(event: any) {
 }
 .kpi-grid-4 { grid-template-columns: repeat(4, 1fr); }
 .kpi-grid-5 { grid-template-columns: repeat(5, 1fr); }
+.kpi-grid-6 { grid-template-columns: repeat(6, 1fr); }
 @media (max-width: 1200px) {
-  .kpi-grid-4, .kpi-grid-5 { grid-template-columns: repeat(3, 1fr); }
+  .kpi-grid-4, .kpi-grid-5, .kpi-grid-6 { grid-template-columns: repeat(3, 1fr); }
 }
 @media (max-width: 700px) {
-  .kpi-grid-4, .kpi-grid-5 { grid-template-columns: repeat(2, 1fr); }
+  .kpi-grid-4, .kpi-grid-5, .kpi-grid-6 { grid-template-columns: repeat(2, 1fr); }
 }
 .charts-row {
   display: grid;

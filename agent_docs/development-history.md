@@ -9,38 +9,6 @@
 
 ## Записи
 
-### 2026-03-06 — Phase 4 завершена (Tasks 14-17)
-
-**Что сделано:**
-- Task 14: Vue 3 + Vite + TypeScript scaffold. PrimeVue 4 (Aura theme), Pinia + persistedstate, vue-echarts, axios, vue-router. Vite proxy /api → localhost:8000. Auth store (login/logout/token). Router с navigation guard
-- Task 15: LoginView — PrimeVue InputText + Password + Button, error handling, redirect
-- Task 16: BillingView — DataTable с pagination, search (debounced 300ms), columns: клиент, ИНН, АП/мес, долг (Tag color-coded), payment_score (ProgressBar), статус, объекты, город. Row click → client card
-- Task 17: ClientCardView — 3 API-вызова через Promise.all, Tabs (PrimeVue 4 Tabs/TabList/Tab/TabPanels/TabPanel), 4 вкладки: инфо, договоры, история оплат, графики (vue-echarts bar + line)
-- Placeholder views: DashboardView, DebtorsView, ImportView
-
-**Тесты:** 74/74 backend passed. Frontend builds successfully
-
-**Файловая структура:**
-```
-frontend/src/
-├── main.ts              # PrimeVue + Pinia + Router setup
-├── router.ts            # 6 routes + auth guard
-├── style.css            # Base styles
-├── api/client.ts        # Axios + Bearer token interceptor
-├── stores/
-│   ├── auth.ts          # login/logout/isAuthenticated
-│   └── organizations.ts # fetch with search/pagination
-└── views/
-    ├── LoginView.vue
-    ├── BillingView.vue
-    ├── ClientCardView.vue
-    ├── DashboardView.vue    (placeholder)
-    ├── DebtorsView.vue      (placeholder)
-    └── ImportView.vue       (placeholder)
-```
-
-**Следующий шаг:** Phase 5 — Tasks 18-19 (Payment Score + DebtorsView)
-
 ### 2026-03-06 — MVP complete (Tasks 18-25)
 
 **Что сделано:**
@@ -329,3 +297,26 @@ ruff чисто.
 месяцам неоплаты. Дублировавшиеся `_aging_bucket` удалены. backend 165 passed.
 
 **Следующий шаг:** наблюдение.
+
+### 2026-05-19 — Плитка «Новые за год» в блоке «Клиентская база»
+
+**Контекст:** запрос руководителя — видеть, сколько клиентов впервые заплатили в
+текущем году (приток новой базы за год), отдельной плиткой после «Активных клиентов».
+
+**Backend (`dashboard.py`):** `/summary` отдаёт новую метрику `new_paid_curr_year` —
+число клиентов, чей первый платёж (`MIN(Document.doc_date)`, `doc_type=PAYMENT`)
+пришёлся на текущий год. Считается из уже собранного `first_pay_rows`, без новых
+запросов к БД.
+
+**Frontend (`DashboardView.vue`):** в блоке «Клиентская база» после «Активных
+клиентов» добавлена плитка «Новые за год» (значение `new_paid_curr_year`, подпись
+с годом из `current_month_label`, подсказка `HINTS.newYear`). Сетка блока
+`kpi-grid-5` → `kpi-grid-6`; добавлен класс `.kpi-grid-6` и брейкпоинты (6→3→2).
+
+**Документация:** памятка `dashboard-metrics.md` — блок «Клиентская база» теперь
+6 плиток, добавлено описание «Новые за год».
+
+**Тесты:** `test_summary_client_base_metrics` проверяет ключ `new_paid_curr_year`;
+`test_api_dashboard.py` — 8 passed. ruff чисто, frontend build (`vue-tsc`) успешен.
+
+**Следующий шаг:** деплой на production, проверка в браузере.

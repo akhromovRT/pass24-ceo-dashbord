@@ -120,3 +120,35 @@ PATCH /api/v1/alerts/{alert_id}
 ```
 
 **Следующий шаг:** Phase 4 — Tasks 14-17 (Vue 3 SPA frontend)
+
+### 2026-03-06 — Phase 4 завершена (Tasks 14-17)
+
+**Что сделано:**
+- Task 14: Vue 3 + Vite + TypeScript scaffold. PrimeVue 4 (Aura theme), Pinia + persistedstate, vue-echarts, axios, vue-router. Vite proxy /api → localhost:8000. Auth store (login/logout/token). Router с navigation guard
+- Task 15: LoginView — PrimeVue InputText + Password + Button, error handling, redirect
+- Task 16: BillingView — DataTable с pagination, search (debounced 300ms), columns: клиент, ИНН, АП/мес, долг (Tag color-coded), payment_score (ProgressBar), статус, объекты, город. Row click → client card
+- Task 17: ClientCardView — 3 API-вызова через Promise.all, Tabs (PrimeVue 4 Tabs/TabList/Tab/TabPanels/TabPanel), 4 вкладки: инфо, договоры, история оплат, графики (vue-echarts bar + line)
+- Placeholder views: DashboardView, DebtorsView, ImportView
+
+**Тесты:** 74/74 backend passed. Frontend builds successfully
+
+**Файловая структура:**
+```
+frontend/src/
+├── main.ts              # PrimeVue + Pinia + Router setup
+├── router.ts            # 6 routes + auth guard
+├── style.css            # Base styles
+├── api/client.ts        # Axios + Bearer token interceptor
+├── stores/
+│   ├── auth.ts          # login/logout/isAuthenticated
+│   └── organizations.ts # fetch with search/pagination
+└── views/
+    ├── LoginView.vue
+    ├── BillingView.vue
+    ├── ClientCardView.vue
+    ├── DashboardView.vue    (placeholder)
+    ├── DebtorsView.vue      (placeholder)
+    └── ImportView.vue       (placeholder)
+```
+
+**Следующий шаг:** Phase 5 — Tasks 18-19 (Payment Score + DebtorsView)
