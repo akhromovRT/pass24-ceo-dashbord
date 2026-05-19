@@ -59,3 +59,34 @@ backend/alembic/
 ```
 
 **Следующий шаг:** Phase 2 — Tasks 6-10 (парсеры 1С + импорт-сервис)
+
+### 2026-03-06 — Phase 2 завершена (Tasks 6-10)
+
+**Что сделано:**
+- Task 6: Contract classifier — keyword-цепочка (подписка → оборудование → сервис → сумма ≥100K → other). 10 тестов
+- Task 7: Hierarchy detection — detect_level() для 3-уровневой иерархии 1С. Расширен для edge-cases: "Допсоглашение", "ДОГОВОР МОНТАЖА", "Счет-оферта", номера без "Договор" префикса. 9 тестов
+- Task 8: Full debt parser — parse_debt_report() парсит реальный файл 1С (1584 строки → 243 покупателя, 258 контрактов, 1036 документов). SHA-256 хеш, период, nested dataclasses. 5 интеграционных тестов
+- Task 9: Bank statement parser — extract_payment_info() с regex для счёта, договора, периода (месяц+год), тарифа. parse_bank_statement() парсит XLSX выписку (26 платежей). 14 тестов
+- Task 10: Import service — ImportService.process_import() сохраняет ParseResult в БД: find-or-create Organization по ИНН, classify + create Contract, create Document. Очистка имён (_ДИАДОК, _СБИС). Алерт для новых клиентов. Идемпотентность. 7 тестов на SQLite in-memory
+
+**Тесты:** 64/64 passed
+
+**Файловая структура (новое):**
+```
+backend/app/parser/
+├── __init__.py
+├── classifier.py       # classify_contract() → ClassificationResult
+├── debt_report.py      # detect_level(), parse_debt_report() → ParseResult
+└── bank_statement.py   # extract_payment_info(), parse_bank_statement()
+backend/app/services/
+├── __init__.py
+└── import_service.py   # ImportService.process_import()
+backend/tests/
+├── conftest.py          # db_session fixture (SQLite in-memory)
+├── test_classifier.py   # 10 тестов
+├── test_debt_parser.py  # 14 тестов
+├── test_bank_parser.py  # 14 тестов
+└── test_import_service.py # 7 тестов
+```
+
+**Следующий шаг:** Phase 3 — Tasks 11-13 (JWT auth, Organizations API, Dashboard/Billing/Import/Alerts API)

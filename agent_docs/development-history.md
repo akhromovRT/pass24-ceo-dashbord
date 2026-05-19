@@ -9,37 +9,6 @@
 
 ## Записи
 
-### 2026-03-06 — Phase 2 завершена (Tasks 6-10)
-
-**Что сделано:**
-- Task 6: Contract classifier — keyword-цепочка (подписка → оборудование → сервис → сумма ≥100K → other). 10 тестов
-- Task 7: Hierarchy detection — detect_level() для 3-уровневой иерархии 1С. Расширен для edge-cases: "Допсоглашение", "ДОГОВОР МОНТАЖА", "Счет-оферта", номера без "Договор" префикса. 9 тестов
-- Task 8: Full debt parser — parse_debt_report() парсит реальный файл 1С (1584 строки → 243 покупателя, 258 контрактов, 1036 документов). SHA-256 хеш, период, nested dataclasses. 5 интеграционных тестов
-- Task 9: Bank statement parser — extract_payment_info() с regex для счёта, договора, периода (месяц+год), тарифа. parse_bank_statement() парсит XLSX выписку (26 платежей). 14 тестов
-- Task 10: Import service — ImportService.process_import() сохраняет ParseResult в БД: find-or-create Organization по ИНН, classify + create Contract, create Document. Очистка имён (_ДИАДОК, _СБИС). Алерт для новых клиентов. Идемпотентность. 7 тестов на SQLite in-memory
-
-**Тесты:** 64/64 passed
-
-**Файловая структура (новое):**
-```
-backend/app/parser/
-├── __init__.py
-├── classifier.py       # classify_contract() → ClassificationResult
-├── debt_report.py      # detect_level(), parse_debt_report() → ParseResult
-└── bank_statement.py   # extract_payment_info(), parse_bank_statement()
-backend/app/services/
-├── __init__.py
-└── import_service.py   # ImportService.process_import()
-backend/tests/
-├── conftest.py          # db_session fixture (SQLite in-memory)
-├── test_classifier.py   # 10 тестов
-├── test_debt_parser.py  # 14 тестов
-├── test_bank_parser.py  # 14 тестов
-└── test_import_service.py # 7 тестов
-```
-
-**Следующий шаг:** Phase 3 — Tasks 11-13 (JWT auth, Organizations API, Dashboard/Billing/Import/Alerts API)
-
 ### 2026-03-06 — Phase 3 завершена (Tasks 11-13)
 
 **Что сделано:**
@@ -313,3 +282,33 @@ ruff чисто по новым файлам.
 - Ручная браузерная проверка модуля на production.
 
 **Следующий шаг:** браузерная проверка модуля; решение по сетевому дефекту VPS.
+
+### 2026-05-19 — HTTPS (Let's Encrypt) + домен ceo.pass24pro.ru
+
+**Контекст:** подключён домен `ceo.pass24pro.ru` (A-запись → 85.239.51.34). Сервис работал
+по голому HTTP — JWT-логины и финансовые данные шли по открытому каналу.
+
+**Что сделано:**
+- **Доки:** IP заменён на домен в `index.md`, `architecture.md`, `runbook.md` (в
+  диагностических `ping`-командах IP оставлен). В `runbook.md` — новый раздел «HTTPS /
+  TLS-сертификат» (проверка срока, ручное/авто-продление, первичный выпуск, troubleshooting).
+- **nginx.conf:** HTTP→HTTPS редирект (301), ACME-webroot `/.well-known/acme-challenge/`,
+  HTTPS-сервер (TLS 1.2/1.3, HTTP/2, HSTS), отдельная локация `/healthz` без редиректа.
+- **docker-compose.yml:** frontend — порт 443 и два ro-bind-mount сертификатов
+  (`/srv/ceo24/certbot/{conf,www}`). Healthcheck переведён с `localhost` на `127.0.0.1`:
+  `localhost` резолвился в IPv6 `::1`, nginx слушает только IPv4 — контейнер висел
+  `unhealthy` (предсуществующий баг, исправлен попутно).
+- **Сертификат:** Let's Encrypt для `ceo.pass24pro.ru` выпущен (certbot standalone,
+  действует до 2026-08-17).
+- **Автопродление:** `/usr/local/bin/ceo24-cert-renew.sh` + cron `/etc/cron.d/ceo24-cert-renew`
+  (еженедельно, пн 04:00; `certonly --webroot --keep-until-expiring` + `nginx -s reload`).
+  Пробный запуск — exit 0, сертификат продления пока не требует.
+
+**Деплой:** выполнен на production 2026-05-19. Простой ~1–2 мин на выпуск сертификата
+(остановка frontend для certbot standalone). Проверка: `https://ceo.pass24pro.ru` — HTTP/2 200;
+HTTP → 301 на HTTPS; API через HTTPS — 401 (ожидаемо без токена); сертификат Let's Encrypt
+валиден; контейнер `frontend` — `healthy`.
+
+**ADR:** ADR-014 (HTTPS через Let's Encrypt, TLS-терминация в nginx-контейнере).
+
+**Следующий шаг:** наблюдение; проконтролировать срабатывание cron-продления.
