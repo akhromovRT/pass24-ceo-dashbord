@@ -30,3 +30,7 @@ Thumbs.db
 
 # Docker
 pgdata/
+
+# Скриншоты и артефакты браузера (PNG в корне репозитория, Playwright MCP)
+/*.png
+.playwright-mcp/
