@@ -145,3 +145,37 @@ def test_non_subscription_payment_not_allocated(db_session):
     AllocationService(db_session).recompute_for_organization(org.id)
     db_session.commit()
     assert _allocs(db_session, org.id) == []
+
+
+def test_period_manual_overrides_regex_extraction(db_session):
+    """Платёж с period_manual=True разносится на указанный месяц (EXPLICIT_PERIOD),
+    игнорируя regex из raw_name."""
+    org, contract = _setup_client(db_session, monthly="10000")
+
+    # Начисление за май 2026
+    charge_may = _charge(db_session, org.id, 2026, 5)
+
+    # Документ с period_manual=True — указан 5/2026
+    # raw_name содержит "за 03/2026" — regex нашёл бы 3/2026, но period_manual побеждает
+    doc = Document(
+        contract_id=contract.id,
+        organization_id=org.id,
+        doc_type=DocType.PAYMENT,
+        doc_date=date(2026, 5, 18),
+        amount=Decimal("10000"),
+        raw_name="за 03/2026 доступ",
+        period_year=2026,
+        period_month=5,
+        period_manual=True,
+    )
+    db_session.add(doc)
+    db_session.flush()
+
+    svc = AllocationService(db_session)
+    svc.recompute_for_organization(org.id)
+    db_session.flush()
+
+    pairs = [(a, mc) for a, mc in _allocs(db_session, org.id)]
+    assert len(pairs) == 1
+    assert pairs[0][0].monthly_charge_id == charge_may.id
+    assert pairs[0][0].basis == AllocationBasis.EXPLICIT_PERIOD

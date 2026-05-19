@@ -1,8 +1,11 @@
 """Разнесение платежей по месячным начислениям (детерминированный пересчёт)."""
+import logging
 from datetime import date
 from decimal import Decimal
 
 from sqlmodel import Session, select
+
+logger = logging.getLogger(__name__)
 
 from app.models import (
     AllocationBasis,
@@ -89,6 +92,19 @@ class AllocationService:
 
             ep = extract_periods(payment.raw_name or "",
                                  payment.doc_date or date.today())
+
+            # Ручной ввод приоритетнее regex-результата
+            if payment.period_manual and payment.period_year and payment.period_month:
+                ep.periods = [(payment.period_year, payment.period_month)]
+            elif payment.period_manual:
+                # period_manual=True, но период не задан — нарушение инварианта
+                # (нормальный путь импорта всегда пишет year/month вместе с флагом).
+                # Не прерываем пересчёт, но делаем проблему видимой.
+                logger.warning(
+                    "Document %s: period_manual=True, но period_year/period_month "
+                    "не заданы — разнесение по regex из raw_name",
+                    payment.id,
+                )
 
             # 1. явные периоды из назначения
             charge_by_period = {(c.year, c.month): c for c in charges}
