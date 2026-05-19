@@ -1,0 +1,556 @@
+<script setup lang="ts">
+import { computed, onMounted, reactive, ref, watch } from 'vue'
+import DataTable from 'primevue/datatable'
+import Column from 'primevue/column'
+import SelectButton from 'primevue/selectbutton'
+import Select from 'primevue/select'
+import MultiSelect from 'primevue/multiselect'
+import DatePicker from 'primevue/datepicker'
+import InputText from 'primevue/inputtext'
+import InputNumber from 'primevue/inputnumber'
+import Checkbox from 'primevue/checkbox'
+import Button from 'primevue/button'
+import Dialog from 'primevue/dialog'
+import { useToast } from 'primevue/usetoast'
+import api from '../api/client'
+
+const toast = useToast()
+
+// --- пресеты и каталоги колонок ---------------------------------------------
+
+const presetOptions = [
+  { label: 'Реестр должников', value: 'debtors' },
+  { label: 'Дисциплина платежей', value: 'discipline' },
+]
+
+const COLUMN_CATALOG: Record<string, { key: string; label: string }[]> = {
+  debtors: [
+    { key: 'name', label: 'Клиент' },
+    { key: 'inn', label: 'ИНН' },
+    { key: 'manager', label: 'Менеджер' },
+    { key: 'monthly_ap', label: 'АП/мес' },
+    { key: 'total_debt', label: 'Долг' },
+    { key: 'months_overdue', label: 'Месяцев просрочки' },
+    { key: 'aging_bucket', label: 'Корзина' },
+    { key: 'last_payment_date', label: 'Последний платёж' },
+    { key: 'collectability', label: 'Собираемость, %' },
+    { key: 'payment_score', label: 'Payment score' },
+    { key: 'priority', label: 'Приоритет взыскания' },
+    { key: 'city', label: 'Город' },
+    { key: 'status', label: 'Статус' },
+  ],
+  discipline: [
+    { key: 'name', label: 'Клиент' },
+    { key: 'inn', label: 'ИНН' },
+    { key: 'manager', label: 'Менеджер' },
+    { key: 'monthly_ap', label: 'АП/мес' },
+    { key: 'collectability', label: 'Собираемость, %' },
+    { key: 'on_time', label: 'On-time, %' },
+    { key: 'tendency', label: 'Тенденция' },
+    { key: 'trend', label: 'Тренд' },
+    { key: 'unpaid_streak', label: 'Неоплачено подряд, мес' },
+    { key: 'payment_score', label: 'Payment score' },
+    { key: 'total_debt', label: 'Долг' },
+    { key: 'status', label: 'Статус' },
+  ],
+}
+
+const statusOptions = [
+  { label: 'Активен', value: 'active' },
+  { label: 'Приостановлен', value: 'suspended' },
+  { label: 'Отток', value: 'churned' },
+  { label: 'Потенциальный', value: 'prospect' },
+]
+const bucketOptions = ['0-30', '31-60', '61-90', '90+']
+const contractTypeOptions = [
+  { label: 'Подписка', value: 'subscription' },
+  { label: 'Оборудование', value: 'equipment' },
+  { label: 'Услуги', value: 'service' },
+  { label: 'Прочее', value: 'other' },
+]
+const sortDirOptions = [
+  { label: '↓ убыв.', value: 'desc' },
+  { label: '↑ возр.', value: 'asc' },
+]
+
+const CURRENCY_KEYS = new Set(['monthly_ap', 'total_debt', 'priority'])
+const PERCENT_KEYS = new Set(['collectability', 'on_time'])
+
+// --- состояние --------------------------------------------------------------
+
+const preset = ref<'debtors' | 'discipline'>('debtors')
+
+const criteria = reactive({
+  period_from: null as Date | null,
+  period_to: null as Date | null,
+  statuses: [] as string[],
+  manager_id: null as string | null,
+  aging_buckets: [] as string[],
+  contract_types: [] as string[],
+  city: '',
+  min_debt: 0,
+  columns: [] as string[],
+  sort_by: null as string | null,
+  sort_dir: 'desc',
+  include_excluded: false,
+})
+
+const managers = ref<{ id: string; name: string }[]>([])
+const templates = ref<any[]>([])
+const selectedTemplate = ref<any>(null)
+
+const rows = ref<any[]>([])
+const columns = ref<{ key: string; header: string }[]>([])
+const total = ref(0)
+const loading = ref(false)
+const exporting = ref(false)
+
+const saveDialog = ref(false)
+const templateName = ref('')
+
+const columnChoices = computed(() => COLUMN_CATALOG[preset.value])
+const templatesForPreset = computed(() =>
+  templates.value.filter(t => t.report_type === preset.value),
+)
+
+// --- загрузка справочников --------------------------------------------------
+
+async function loadManagers() {
+  try {
+    managers.value = (await api.get('/users/options')).data
+  } catch {
+    /* список менеджеров не критичен */
+  }
+}
+
+async function loadTemplates() {
+  try {
+    templates.value = (await api.get('/reports/templates')).data
+  } catch {
+    /* шаблоны не критичны */
+  }
+}
+
+// --- сборка критериев -------------------------------------------------------
+
+function monthStr(d: Date | null): string | null {
+  if (!d) return null
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+}
+
+function parseMonth(value: string | null): Date | null {
+  if (!value) return null
+  const [y, m] = value.split('-').map(Number)
+  if (!y || !m) return null
+  return new Date(y, m - 1, 1)
+}
+
+function buildCriteria() {
+  return {
+    period_from: monthStr(criteria.period_from),
+    period_to: monthStr(criteria.period_to),
+    statuses: criteria.statuses,
+    manager_id: criteria.manager_id || null,
+    aging_buckets: preset.value === 'debtors' ? criteria.aging_buckets : [],
+    contract_types: criteria.contract_types,
+    city: criteria.city || null,
+    min_debt: criteria.min_debt || 0,
+    columns: criteria.columns,
+    sort_by: criteria.sort_by || null,
+    sort_dir: criteria.sort_dir,
+    include_excluded: criteria.include_excluded,
+  }
+}
+
+// --- генерация и экспорт ----------------------------------------------------
+
+async function runPreview() {
+  loading.value = true
+  try {
+    const res = await api.post(`/reports/${preset.value}/preview`, buildCriteria())
+    columns.value = res.data.columns
+    rows.value = res.data.rows
+    total.value = res.data.total
+  } catch {
+    toast.add({ severity: 'error', summary: 'Не удалось построить отчёт', life: 4000 })
+  } finally {
+    loading.value = false
+  }
+}
+
+async function exportXlsx() {
+  exporting.value = true
+  try {
+    const res = await api.post(`/reports/${preset.value}/export`, buildCriteria(), {
+      responseType: 'blob',
+    })
+    const url = URL.createObjectURL(res.data)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `${preset.value}-${new Date().toISOString().slice(0, 10)}.xlsx`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(url)
+    toast.add({ severity: 'success', summary: 'Файл выгружен', life: 2500 })
+  } catch {
+    toast.add({ severity: 'error', summary: 'Не удалось выгрузить файл', life: 4000 })
+  } finally {
+    exporting.value = false
+  }
+}
+
+// --- шаблоны критериев ------------------------------------------------------
+
+function applyTemplate(tpl: any) {
+  if (!tpl) return
+  preset.value = tpl.report_type
+  const c = tpl.criteria || {}
+  criteria.period_from = parseMonth(c.period_from)
+  criteria.period_to = parseMonth(c.period_to)
+  criteria.statuses = c.statuses || []
+  criteria.manager_id = c.manager_id || null
+  criteria.aging_buckets = c.aging_buckets || []
+  criteria.contract_types = c.contract_types || []
+  criteria.city = c.city || ''
+  criteria.min_debt = c.min_debt || 0
+  criteria.columns = c.columns || []
+  criteria.sort_by = c.sort_by || null
+  criteria.sort_dir = c.sort_dir || 'desc'
+  criteria.include_excluded = !!c.include_excluded
+  runPreview()
+}
+
+async function saveTemplate() {
+  if (!templateName.value.trim()) return
+  try {
+    await api.post('/reports/templates', {
+      name: templateName.value.trim(),
+      report_type: preset.value,
+      criteria: buildCriteria(),
+    })
+    saveDialog.value = false
+    templateName.value = ''
+    await loadTemplates()
+    toast.add({ severity: 'success', summary: 'Шаблон сохранён', life: 2500 })
+  } catch {
+    toast.add({ severity: 'error', summary: 'Не удалось сохранить шаблон', life: 4000 })
+  }
+}
+
+async function deleteTemplate() {
+  if (!selectedTemplate.value) return
+  try {
+    await api.delete(`/reports/templates/${selectedTemplate.value.id}`)
+    selectedTemplate.value = null
+    await loadTemplates()
+    toast.add({ severity: 'success', summary: 'Шаблон удалён', life: 2500 })
+  } catch {
+    toast.add({ severity: 'error', summary: 'Не удалось удалить шаблон', life: 4000 })
+  }
+}
+
+// --- форматирование ячеек ---------------------------------------------------
+
+function formatCell(key: string, value: any): string {
+  if (value === null || value === undefined || value === '') return '—'
+  if (CURRENCY_KEYS.has(key)) {
+    return new Intl.NumberFormat('ru-RU', {
+      style: 'currency', currency: 'RUB', maximumFractionDigits: 0,
+    }).format(value)
+  }
+  if (PERCENT_KEYS.has(key)) return `${value} %`
+  if (key === 'last_payment_date') return new Date(value).toLocaleDateString('ru-RU')
+  return String(value)
+}
+
+// --- реакции ----------------------------------------------------------------
+
+watch(preset, () => {
+  selectedTemplate.value = null
+  criteria.columns = []
+  criteria.sort_by = null
+  criteria.aging_buckets = []
+  runPreview()
+})
+
+onMounted(() => {
+  loadManagers()
+  loadTemplates()
+  runPreview()
+})
+</script>
+
+<template>
+  <div class="reports-view">
+    <div class="reports-header">
+      <h1>Отчёты</h1>
+      <SelectButton
+        v-model="preset"
+        :options="presetOptions"
+        optionLabel="label"
+        optionValue="value"
+        :allowEmpty="false"
+      />
+    </div>
+
+    <p class="preset-hint">
+      {{ preset === 'debtors'
+        ? 'Кого взыскивать: должники с приоритетом взыскания (долг × возраст × шанс возврата).'
+        : 'Кто соскальзывает в долг: собираемость, дисциплина и тренд по активным подписчикам.' }}
+    </p>
+
+    <!-- Панель критериев -->
+    <div class="criteria-card">
+      <div class="criteria-grid">
+        <label class="field">
+          <span>Период с</span>
+          <DatePicker v-model="criteria.period_from" view="month" dateFormat="mm/yy"
+                      placeholder="любой" showButtonBar />
+        </label>
+        <label class="field">
+          <span>Период по</span>
+          <DatePicker v-model="criteria.period_to" view="month" dateFormat="mm/yy"
+                      placeholder="тек. месяц" showButtonBar />
+        </label>
+        <label class="field">
+          <span>Статус клиента</span>
+          <MultiSelect v-model="criteria.statuses" :options="statusOptions"
+                       optionLabel="label" optionValue="value"
+                       placeholder="любой" :maxSelectedLabels="2" />
+        </label>
+        <label class="field">
+          <span>Менеджер</span>
+          <Select v-model="criteria.manager_id" :options="managers"
+                  optionLabel="name" optionValue="id"
+                  placeholder="любой" showClear filter />
+        </label>
+        <label v-if="preset === 'debtors'" class="field">
+          <span>Корзина просрочки</span>
+          <MultiSelect v-model="criteria.aging_buckets" :options="bucketOptions"
+                       placeholder="любая" :maxSelectedLabels="3" />
+        </label>
+        <label class="field">
+          <span>Тип договора</span>
+          <MultiSelect v-model="criteria.contract_types" :options="contractTypeOptions"
+                       optionLabel="label" optionValue="value"
+                       placeholder="любой" :maxSelectedLabels="2" />
+        </label>
+        <label class="field">
+          <span>Город / регион</span>
+          <InputText v-model="criteria.city" placeholder="любой" />
+        </label>
+        <label v-if="preset === 'debtors'" class="field">
+          <span>Мин. сумма долга, ₽</span>
+          <InputNumber v-model="criteria.min_debt" :min="0" :step="1000"
+                       showButtons mode="decimal" />
+        </label>
+        <label class="field">
+          <span>Колонки</span>
+          <MultiSelect v-model="criteria.columns" :options="columnChoices"
+                       optionLabel="label" optionValue="key"
+                       placeholder="все" :maxSelectedLabels="3" />
+        </label>
+        <label class="field">
+          <span>Сортировать по</span>
+          <Select v-model="criteria.sort_by" :options="columnChoices"
+                  optionLabel="label" optionValue="key"
+                  placeholder="по умолчанию" showClear />
+        </label>
+        <label class="field">
+          <span>Направление</span>
+          <SelectButton v-model="criteria.sort_dir" :options="sortDirOptions"
+                        optionLabel="label" optionValue="value" :allowEmpty="false" />
+        </label>
+        <label class="field field-check">
+          <Checkbox v-model="criteria.include_excluded" :binary="true" inputId="excl" />
+          <span>Учитывать исключённых из аналитики</span>
+        </label>
+      </div>
+
+      <div class="criteria-actions">
+        <div class="template-block">
+          <Select v-model="selectedTemplate" :options="templatesForPreset"
+                  optionLabel="name" placeholder="Сохранённый набор"
+                  showClear class="template-select"
+                  @update:modelValue="applyTemplate" />
+          <Button label="Удалить" icon="pi pi-trash" severity="secondary" outlined
+                  :disabled="!selectedTemplate" @click="deleteTemplate" />
+          <Button label="Сохранить набор" icon="pi pi-bookmark" severity="secondary"
+                  outlined @click="saveDialog = true" />
+        </div>
+        <div class="run-block">
+          <Button label="Сформировать" icon="pi pi-refresh"
+                  :loading="loading" @click="runPreview" />
+          <Button label="Экспорт в Excel" icon="pi pi-file-excel" severity="success"
+                  :loading="exporting" :disabled="!rows.length" @click="exportXlsx" />
+        </div>
+      </div>
+    </div>
+
+    <!-- Превью -->
+    <DataTable
+      :value="rows"
+      :loading="loading"
+      paginator
+      :rows="25"
+      :rowsPerPageOptions="[25, 50, 100]"
+      stripedRows
+      rowHover
+      scrollable
+      scrollHeight="calc(100vh - 430px)"
+      class="report-table"
+    >
+      <template #empty>Нет строк по заданным критериям.</template>
+      <template #header>
+        <span class="row-count">Строк: {{ total }}</span>
+      </template>
+      <Column
+        v-for="col in columns"
+        :key="col.key"
+        :field="col.key"
+        :header="col.header"
+        sortable
+      >
+        <template #body="{ data }">{{ formatCell(col.key, data[col.key]) }}</template>
+      </Column>
+    </DataTable>
+
+    <!-- Диалог сохранения шаблона -->
+    <Dialog v-model:visible="saveDialog" header="Сохранить набор критериев"
+            modal :style="{ width: '24rem' }">
+      <label class="dialog-field">
+        <span>Название набора</span>
+        <InputText v-model="templateName" autofocus
+                   placeholder="напр. Крупные должники 90+"
+                   @keyup.enter="saveTemplate" />
+      </label>
+      <template #footer>
+        <Button label="Отмена" severity="secondary" text @click="saveDialog = false" />
+        <Button label="Сохранить" icon="pi pi-check"
+                :disabled="!templateName.trim()" @click="saveTemplate" />
+      </template>
+    </Dialog>
+  </div>
+</template>
+
+<style scoped>
+.reports-view {
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.reports-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.reports-header h1 {
+  margin: 0;
+  font-size: 1.5rem;
+  color: #1e293b;
+}
+
+.preset-hint {
+  margin: -0.25rem 0 0;
+  color: #64748b;
+  font-size: 0.85rem;
+}
+
+.criteria-card {
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.criteria-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 1rem;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+  color: #475569;
+}
+
+.field span {
+  font-weight: 600;
+}
+
+.field :deep(.p-component) {
+  width: 100%;
+}
+
+.field-check {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+  align-self: end;
+}
+
+.field-check span {
+  font-weight: 500;
+}
+
+.criteria-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  border-top: 1px solid #f1f5f9;
+  padding-top: 1rem;
+}
+
+.template-block,
+.run-block {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.template-select {
+  min-width: 220px;
+}
+
+.report-table {
+  background: white;
+  border-radius: 8px;
+}
+
+.row-count {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #475569;
+}
+
+.dialog-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: #475569;
+}
+
+.dialog-field span {
+  font-weight: 600;
+}
+
+.dialog-field :deep(.p-component) {
+  width: 100%;
+}
+</style>

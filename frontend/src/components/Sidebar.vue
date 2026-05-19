@@ -12,6 +12,7 @@ const navItems = computed(() => {
     { label: 'Dashboard', icon: 'pi pi-chart-bar', route: '/' },
     { label: 'Реестр клиентов', icon: 'pi pi-list', route: '/billing' },
     { label: 'Должники', icon: 'pi pi-exclamation-triangle', route: '/debtors' },
+    { label: 'Отчёты', icon: 'pi pi-file-export', route: '/reports' },
     { label: 'Импорт', icon: 'pi pi-upload', route: '/import' },
   ]
   if (auth.isAdmin) {

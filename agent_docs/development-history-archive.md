@@ -35,3 +35,27 @@
 **Ключевые решения:** ADR-006 (uv вместо pip для управления зависимостями)
 
 **Следующий шаг:** Tasks 4-5 (остальные модели + Alembic миграции)
+
+### 2026-03-05 — Phase 1 завершена (Tasks 4-5)
+
+**Что сделано:**
+- Task 4: Модели MonthlySnapshot (UniqueConstraint по 4 полям, иммутабельные снапшоты), ImportRun (JSON-поля errors/delta_summary через SQLAlchemy Column(JSON)), User (3 роли: admin/manager/viewer), Alert (9 типов алертов, 3 severity, 4 статуса). 11 новых тестов
+- Task 5: Alembic инициализирован (1.18.4), env.py настроен на SQLModel.metadata + settings.DATABASE_URL. Миграция `2347cbabe6c7_initial_schema` сгенерирована через SQLite (Docker не установлен). Проверены upgrade/downgrade. 7 таблиц создаются корректно
+- .gitignore дополнен правилом `*.db`
+
+**Тесты:** 19/19 passed (8 старых + 11 новых)
+
+**Файловая структура (новое):**
+```
+backend/app/models/
+├── snapshot.py      # MonthlySnapshot
+├── import_run.py    # ImportRun + ImportStatus
+├── user.py          # User + UserRole
+└── alert.py         # Alert + AlertType + AlertSeverity + AlertStatus
+backend/alembic/
+├── env.py           # Настроен на SQLModel.metadata
+└── versions/
+    └── 2347cbabe6c7_initial_schema.py
+```
+
+**Следующий шаг:** Phase 2 — Tasks 6-10 (парсеры 1С + импорт-сервис)
