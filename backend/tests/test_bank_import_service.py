@@ -174,3 +174,68 @@ class TestBankImport:
         assert run.delta_summary["account_number"] == "40702"
         assert run.delta_summary["owner"] == "ОНВИ Сервис"
         assert run.delta_summary["total_payments"] == 1
+
+    def test_period_override_sets_period_manual_true(self, db_session: Session):
+        """Оверрайд периода: Document.period_manual=True, period_year/month по оверрайду."""
+        payment = ParsedPayment(
+            date=date(2026, 5, 18),
+            doc_number="542",
+            amount=Decimal("12387.38"),
+            counterparty='ООО Агростройкомплекс',
+            inn="5024039775",
+            description="Доступ на месяц 2026г. к системе PASS24.online",
+            payment_info=PaymentInfo(),
+        )
+        result = _make_result([payment])
+
+        svc = ImportService(db_session)
+        svc.process_bank_import(
+            result,
+            file_hash="xyz",
+            period_overrides={0: (2026, 5)},
+        )
+
+        docs = db_session.exec(select(Document)).all()
+        assert len(docs) == 1
+        assert docs[0].period_manual is True
+        assert docs[0].period_year == 2026
+        assert docs[0].period_month == 5
+
+    def test_no_override_period_manual_false(self, db_session: Session):
+        """Без оверрайда Document.period_manual остаётся False."""
+        payment = _make_payment(date(2026, 5, 6), 12387.38, "X", "5024039775")
+        result = _make_result([payment])
+
+        svc = ImportService(db_session)
+        svc.process_bank_import(result, file_hash="qqq")
+
+        docs = db_session.exec(select(Document)).all()
+        assert docs[0].period_manual is False
+
+    def test_period_override_applies_to_correct_index(self, db_session: Session):
+        """Оверрайд по индексу 1 затрагивает только второй платёж, не первый."""
+        payments = [
+            _make_payment(date(2026, 5, 1), 1000, "A", "1234567890"),
+            ParsedPayment(
+                date=date(2026, 5, 2),
+                doc_number="1",
+                amount=Decimal("2000"),
+                counterparty="B",
+                inn="5024039775",
+                description="Доступ к системе PASS24.online",
+                payment_info=PaymentInfo(),
+            ),
+        ]
+        result = _make_result(payments)
+
+        svc = ImportService(db_session)
+        svc.process_bank_import(
+            result, file_hash="idx-test", period_overrides={1: (2026, 4)}
+        )
+
+        docs = sorted(db_session.exec(select(Document)).all(), key=lambda d: d.amount)
+        assert len(docs) == 2
+        assert docs[0].period_manual is False   # индекс 0 не затронут
+        assert docs[1].period_manual is True    # индекс 1 — оверрайд
+        assert docs[1].period_year == 2026
+        assert docs[1].period_month == 4

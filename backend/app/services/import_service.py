@@ -11,7 +11,7 @@ from app.models import (
     ImportRun, ImportStatus,
     Organization, OrgStatus,
 )
-from app.parser.bank_statement import BankStatementResult, ParsedPayment
+from app.parser.bank_statement import BankStatementResult, ParsedPayment, PaymentInfo
 from app.parser.classifier import classify_contract
 from app.parser.debt_report import ParsedBuyer, ParsedContract, ParsedDocument, ParseResult
 
@@ -228,7 +228,8 @@ class ImportService:
     # ---- Bank statement import ----
 
     def process_payments_report(
-        self, result: BankStatementResult, file_hash: str
+        self, result: BankStatementResult, file_hash: str,
+        period_overrides: dict[int, tuple[int, int]] | None = None,
     ) -> ImportRun:
         """Импорт реестра «Оплата от покупателей» из 1С — полная история платежей.
         Документы создаются на синтетическом контракте 1C-PAYMENTS, чтобы леджер
@@ -237,6 +238,7 @@ class ImportService:
             result, file_hash,
             synthetic_contract=_PAYMENTS_SYNTH_CONTRACT_NUMBER,
             source_label="payments_report",
+            period_overrides=period_overrides,
         )
 
     def process_bank_import(
@@ -245,6 +247,7 @@ class ImportService:
         file_hash: str,
         synthetic_contract: str = _BANK_SYNTH_CONTRACT_NUMBER,
         source_label: str = "bank_statement",
+        period_overrides: dict[int, tuple[int, int]] | None = None,
     ) -> ImportRun:
         self._new_buyers = 0
         self._skipped_dup_documents = 0
@@ -272,7 +275,17 @@ class ImportService:
         seen_orgs: set = set()
         seen_contracts: set = set()
 
-        for p in bank_result.payments:
+        for idx, p in enumerate(bank_result.payments):
+            # Применить ручной оверрайд периода
+            if period_overrides and idx in period_overrides:
+                year, month = period_overrides[idx]
+                if p.payment_info is None:
+                    p.payment_info = PaymentInfo()
+                p.payment_info.period_year = year
+                p.payment_info.period_month = month
+                p.payment_info.periods = [(year, month)]
+                p.payment_info.period_manual = True
+
             inn = _normalize_inn(p.inn)
             if not inn:
                 skipped_no_inn += 1
@@ -310,6 +323,7 @@ class ImportService:
                 amount=p.amount,
                 period_year=p.payment_info.period_year if p.payment_info else None,
                 period_month=p.payment_info.period_month if p.payment_info else None,
+                period_manual=p.payment_info.period_manual if p.payment_info else False,
                 import_run_id=import_run.id,
                 raw_name=(p.description or "")[:500],
             )
