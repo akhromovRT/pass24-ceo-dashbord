@@ -173,12 +173,29 @@ def _build_mrr_plan(session: Session, c) -> list[dict]:
     return out
 
 
+def _build_active_clients(session: Session, c) -> list[dict]:
+    base = select(Organization).where(Organization.status == OrgStatus.ACTIVE)
+    base = _apply_org_filters(base, c)
+    orgs = list(session.exec(base).all())
+    managers = _managers(session)
+    last_pay = dict(last_pay_rows(session))
+    out: list[dict] = []
+    for o in orgs:
+        row = _org_row(o, managers)
+        lp = last_pay.get(o.id)
+        row["last_payment_date"] = lp.isoformat() if lp else None
+        out.append(row)
+    out.sort(key=lambda r: r.get("monthly_ap") or 0, reverse=True)
+    return out
+
+
 # --- dispatcher -------------------------------------------------------------
 
 _DISPATCH: dict = {
     "mrr_fact": _build_mrr_fact,
     "collected_current": _build_mrr_fact,
     "mrr_plan": _build_mrr_plan,
+    "active_clients": _build_active_clients,
 }
 
 

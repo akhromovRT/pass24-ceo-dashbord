@@ -134,3 +134,26 @@ def test_collected_current_reuses_mrr_fact_for_given_period(db_session: Session)
     assert len(rows) == 1
     assert rows[0]["contribution"] == 7000.0
     assert control_value_for("collected_current", rows) == 7000.0
+
+
+# --- active_clients -------------------------------------------------------
+
+
+def test_active_clients_lists_actives_with_last_payment(db_session: Session):
+    a = _org(db_session, "50", name="A", status=OrgStatus.ACTIVE)
+    b = _org(db_session, "51", name="B", status=OrgStatus.ACTIVE)
+    _org(db_session, "52", name="C-churn", status=OrgStatus.CHURNED)
+    _org(db_session, "53", name="D-excl", status=OrgStatus.ACTIVE,
+         excluded_from_analytics=True)
+
+    ch = _charge(db_session, a, 2026, 4, 1000)
+    _pay(db_session, a, ch, 1000, date(2026, 4, 10))
+
+    criteria = ReportCriteria(metric="active_clients")
+    rows = build_composition_report(db_session, criteria)
+    assert {r["name"] for r in rows} == {"A", "B"}
+    a_row = next(r for r in rows if r["name"] == "A")
+    b_row = next(r for r in rows if r["name"] == "B")
+    assert a_row["last_payment_date"] == "2026-04-10"
+    assert b_row["last_payment_date"] is None
+    assert control_value_for("active_clients", rows) == 2
