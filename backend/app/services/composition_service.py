@@ -155,10 +155,29 @@ def _build_mrr_fact(session: Session, c) -> list[dict]:
     return out
 
 
+def _build_mrr_plan(session: Session, c) -> list[dict]:
+    base = select(Organization).where(
+        Organization.status == OrgStatus.ACTIVE,
+        Organization.monthly_ap.is_not(None),  # type: ignore[union-attr]
+        Organization.monthly_ap > 0,  # type: ignore[operator]
+    )
+    base = _apply_org_filters(base, c)
+    orgs = list(session.exec(base).all())
+    managers = _managers(session)
+    out: list[dict] = []
+    for o in orgs:
+        row = _org_row(o, managers)
+        row["contribution"] = round(to_float(o.monthly_ap), 2)
+        out.append(row)
+    out.sort(key=lambda r: r["contribution"], reverse=True)
+    return out
+
+
 # --- dispatcher -------------------------------------------------------------
 
 _DISPATCH: dict = {
     "mrr_fact": _build_mrr_fact,
+    "mrr_plan": _build_mrr_plan,
 }
 
 

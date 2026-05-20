@@ -97,3 +97,22 @@ def test_mrr_fact_excludes_excluded_from_analytics(db_session: Session):
 def test_mrr_fact_empty_for_invalid_period(db_session: Session):
     criteria = ReportCriteria(metric="mrr_fact", period="not-a-date")
     assert build_composition_report(db_session, criteria) == []
+
+
+# --- mrr_plan -------------------------------------------------------------
+
+
+def test_mrr_plan_lists_active_subscribers(db_session: Session):
+    _org(db_session, "30", name="A", status=OrgStatus.ACTIVE,
+         monthly_ap=Decimal("10000"))
+    _org(db_session, "31", name="B", status=OrgStatus.ACTIVE,
+         monthly_ap=Decimal("5000"))
+    _org(db_session, "32", name="C-churn", status=OrgStatus.CHURNED,
+         monthly_ap=Decimal("999"))  # неактивен — не считаем
+    _org(db_session, "33", name="D-noap", status=OrgStatus.ACTIVE,
+         monthly_ap=None)  # без АП — не считаем
+
+    criteria = ReportCriteria(metric="mrr_plan")
+    rows = build_composition_report(db_session, criteria)
+    assert {r["name"] for r in rows} == {"A", "B"}
+    assert control_value_for("mrr_plan", rows) == 15000.0
