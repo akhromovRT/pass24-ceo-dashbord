@@ -22,6 +22,18 @@ use([
 ])
 
 const router = useRouter()
+
+function compositionLink(metric: string, period?: string | null) {
+  return {
+    path: '/reports',
+    query: {
+      preset: 'composition',
+      metric,
+      ...(period ? { period } : {}),
+    },
+  }
+}
+
 const summary = ref<any>(null)
 const trend = ref<any[]>([])
 const aging = ref<any[]>([])
@@ -232,6 +244,7 @@ function onAgingClick(event: any) {
           :pct="summary.collection_rate_fact"
           :hint="HINTS.mrrFact"
           accent="primary"
+          :to="compositionLink('mrr_fact', summary.fact_month)"
         />
         <KpiTile
           label="MRR план"
@@ -239,6 +252,7 @@ function onAgingClick(event: any) {
           sub="база подписки"
           :hint="HINTS.mrrPlan"
           accent="neutral"
+          :to="compositionLink('mrr_plan')"
         />
         <KpiTile
           :label="`Сбор · ${ruMonth(summary.current_month_label)} (текущий)`"
@@ -246,6 +260,7 @@ function onAgingClick(event: any) {
           :sub="`${currentMonthPct ?? '—'}% плана · день ${summary.days_passed}/${summary.days_in_month}`"
           :pct="currentMonthPct"
           :hint="HINTS.sbor"
+          :to="compositionLink('collected_current', summary.current_month_label)"
         />
         <KpiTile
           label="Долг"
@@ -266,6 +281,7 @@ function onAgingClick(event: any) {
           sub="всего в статусе «Активен»"
           :hint="HINTS.active"
           accent="success"
+          :to="compositionLink('active_clients')"
         />
         <KpiTile
           label="Новые за год"
@@ -273,6 +289,7 @@ function onAgingClick(event: any) {
           :sub="`впервые заплатили в ${summary.current_month_label?.slice(0, 4)}`"
           :hint="HINTS.newYear"
           accent="success"
+          :to="compositionLink('new_paid_curr_year', summary.current_month_label?.slice(0, 4))"
         />
         <KpiTile
           :label="`Новые · ${ruMonth(summary.fact_month)}`"
@@ -280,6 +297,7 @@ function onAgingClick(event: any) {
           sub="впервые заплатили"
           :hint="HINTS.newPrev"
           accent="success"
+          :to="compositionLink('new_paid_prev_month', summary.fact_month)"
         />
         <KpiTile
           :label="`Новые · ${ruMonth(summary.current_month_label)}`"
@@ -287,6 +305,7 @@ function onAgingClick(event: any) {
           sub="впервые заплатили · месяц идёт"
           :hint="HINTS.newCurr"
           accent="success"
+          :to="compositionLink('new_paid_curr_month', summary.current_month_label)"
         />
         <KpiTile
           label="Отток с начала года"
@@ -294,6 +313,7 @@ function onAgingClick(event: any) {
           sub="перестали платить"
           :hint="HINTS.stopped"
           accent="danger"
+          :to="compositionLink('stopped_since_year_start')"
         />
         <KpiTile
           label="Churn rate"
