@@ -12,16 +12,49 @@ import Checkbox from 'primevue/checkbox'
 import Button from 'primevue/button'
 import Dialog from 'primevue/dialog'
 import { useToast } from 'primevue/usetoast'
+import { useRoute, useRouter } from 'vue-router'
 import api from '../api/client'
 
 const toast = useToast()
+const route = useRoute()
+const router = useRouter()
 
 // --- пресеты и каталоги колонок ---------------------------------------------
 
 const presetOptions = [
   { label: 'Реестр должников', value: 'debtors' },
   { label: 'Дисциплина платежей', value: 'discipline' },
+  { label: 'Состав показателя', value: 'composition' },
 ]
+
+type MetricKey =
+  | 'mrr_fact'
+  | 'collected_current'
+  | 'mrr_plan'
+  | 'active_clients'
+  | 'new_paid_curr_year'
+  | 'new_paid_prev_month'
+  | 'new_paid_curr_month'
+  | 'stopped_since_year_start'
+
+type MetricOption = { value: MetricKey; label: string; period: 'month' | 'year' | 'none' }
+
+const METRIC_OPTIONS: MetricOption[] = [
+  { value: 'mrr_fact',                 label: 'MRR факт (за месяц)',          period: 'month' },
+  { value: 'collected_current',        label: 'Сбор за месяц',                period: 'month' },
+  { value: 'mrr_plan',                 label: 'MRR план',                     period: 'none' },
+  { value: 'active_clients',           label: 'Активные клиенты',             period: 'none' },
+  { value: 'new_paid_curr_year',       label: 'Новые за год',                 period: 'year' },
+  { value: 'new_paid_prev_month',      label: 'Новые за прошлый месяц',       period: 'month' },
+  { value: 'new_paid_curr_month',      label: 'Новые за текущий месяц',       period: 'month' },
+  { value: 'stopped_since_year_start', label: 'Отток с начала года',          period: 'none' },
+]
+
+function metricPeriodKind(m: string | null): 'month' | 'year' | 'none' {
+  return METRIC_OPTIONS.find(x => x.value === m)?.period ?? 'none'
+}
+
+const MONEY_METRICS = new Set(['mrr_fact', 'collected_current', 'mrr_plan'])
 
 const COLUMN_CATALOG: Record<string, { key: string; label: string }[]> = {
   debtors: [
@@ -53,6 +86,18 @@ const COLUMN_CATALOG: Record<string, { key: string; label: string }[]> = {
     { key: 'total_debt', label: 'Долг' },
     { key: 'status', label: 'Статус' },
   ],
+  composition: [
+    { key: 'name', label: 'Клиент' },
+    { key: 'inn', label: 'ИНН' },
+    { key: 'manager', label: 'Менеджер' },
+    { key: 'monthly_ap', label: 'АП/мес' },
+    { key: 'status', label: 'Статус' },
+    { key: 'city', label: 'Город' },
+    { key: 'contribution', label: 'Вклад в показатель, ₽' },
+    { key: 'first_payment_date', label: 'Дата первого платежа' },
+    { key: 'last_payment_date', label: 'Дата последнего платежа' },
+    { key: 'days_since_last', label: 'Дней с последнего платежа' },
+  ],
 }
 
 const statusOptions = [
@@ -73,7 +118,7 @@ const sortDirOptions = [
   { label: '↑ возр.', value: 'asc' },
 ]
 
-const CURRENCY_KEYS = new Set(['monthly_ap', 'total_debt', 'priority'])
+const CURRENCY_KEYS = new Set(['monthly_ap', 'total_debt', 'priority', 'contribution'])
 const PERCENT_KEYS = new Set(['collectability', 'on_time'])
 
 // Минимальная ширина колонки — чтобы таблица имела предсказуемую ширину и
@@ -96,6 +141,9 @@ const COLUMN_WIDTH: Record<string, string> = {
   priority: '11rem',
   city: '11rem',
   status: '8rem',
+  contribution: '12rem',
+  first_payment_date: '11rem',
+  days_since_last: '11rem',
 }
 
 function colMinWidth(key: string): string {
@@ -104,7 +152,7 @@ function colMinWidth(key: string): string {
 
 // --- состояние --------------------------------------------------------------
 
-const preset = ref<'debtors' | 'discipline'>('debtors')
+const preset = ref<'debtors' | 'discipline' | 'composition'>('debtors')
 
 const criteria = reactive({
   period_from: null as Date | null,
@@ -119,6 +167,31 @@ const criteria = reactive({
   sort_by: null as string | null,
   sort_dir: 'desc',
   include_excluded: false,
+  metric: null as MetricKey | null,
+  period: null as string | null,
+})
+
+const controlValue = ref<number | null>(null)
+
+const periodDate = computed<Date | null>({
+  get() {
+    if (!criteria.period) return null
+    const kind = metricPeriodKind(criteria.metric)
+    if (kind === 'year') return new Date(Number(criteria.period), 0, 1)
+    const [y, m] = criteria.period.split('-').map(Number)
+    if (!y || !m) return null
+    return new Date(y, m - 1, 1)
+  },
+  set(d) {
+    if (!d) {
+      criteria.period = null
+      return
+    }
+    const kind = metricPeriodKind(criteria.metric)
+    criteria.period = kind === 'year'
+      ? String(d.getFullYear())
+      : `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+  },
 })
 
 const managers = ref<{ id: string; name: string }[]>([])
@@ -172,7 +245,7 @@ function parseMonth(value: string | null): Date | null {
 }
 
 function buildCriteria() {
-  return {
+  const c: any = {
     period_from: monthStr(criteria.period_from),
     period_to: monthStr(criteria.period_to),
     statuses: criteria.statuses,
@@ -186,19 +259,29 @@ function buildCriteria() {
     sort_dir: criteria.sort_dir,
     include_excluded: criteria.include_excluded,
   }
+  if (preset.value === 'composition') {
+    c.metric = criteria.metric
+    c.period = criteria.period
+  }
+  return c
 }
 
 // --- генерация и экспорт ----------------------------------------------------
 
 async function runPreview() {
   loading.value = true
+  controlValue.value = null
   try {
     const res = await api.post(`/reports/${preset.value}/preview`, buildCriteria())
     columns.value = res.data.columns
     rows.value = res.data.rows
     total.value = res.data.total
-  } catch {
-    toast.add({ severity: 'error', summary: 'Не удалось построить отчёт', life: 4000 })
+    if (preset.value === 'composition' && typeof res.data.control_value === 'number') {
+      controlValue.value = res.data.control_value
+    }
+  } catch (e: any) {
+    const detail = e?.response?.data?.detail ?? 'Не удалось построить отчёт'
+    toast.add({ severity: 'error', summary: detail, life: 4000 })
   } finally {
     loading.value = false
   }
@@ -244,6 +327,8 @@ function applyTemplate(tpl: any) {
   criteria.sort_by = c.sort_by || null
   criteria.sort_dir = c.sort_dir || 'desc'
   criteria.include_excluded = !!c.include_excluded
+  criteria.metric = c.metric || null
+  criteria.period = c.period || null
   runPreview()
 }
 
@@ -278,6 +363,15 @@ async function deleteTemplate() {
 
 // --- форматирование ячеек ---------------------------------------------------
 
+function formatControlValue(v: number): string {
+  if (criteria.metric && MONEY_METRICS.has(criteria.metric)) {
+    return new Intl.NumberFormat('ru-RU', {
+      style: 'currency', currency: 'RUB', maximumFractionDigits: 0,
+    }).format(v)
+  }
+  return `${v} клиентов`
+}
+
 function formatCell(key: string, value: any): string {
   if (value === null || value === undefined || value === '') return '—'
   if (CURRENCY_KEYS.has(key)) {
@@ -286,7 +380,9 @@ function formatCell(key: string, value: any): string {
     }).format(value)
   }
   if (PERCENT_KEYS.has(key)) return `${value} %`
-  if (key === 'last_payment_date') return new Date(value).toLocaleDateString('ru-RU')
+  if (key === 'last_payment_date' || key === 'first_payment_date') {
+    return new Date(value).toLocaleDateString('ru-RU')
+  }
   return String(value)
 }
 
@@ -297,12 +393,34 @@ watch(preset, () => {
   criteria.columns = []
   criteria.sort_by = null
   criteria.aging_buckets = []
+  if (preset.value !== 'composition') {
+    criteria.metric = null
+    criteria.period = null
+  }
+  if (route.query.preset && route.query.preset !== preset.value) {
+    router.replace({ query: {} })
+  }
   runPreview()
 })
+
+function applyQueryComposition() {
+  const q = route.query
+  if (q.preset !== 'composition' || typeof q.metric !== 'string') return false
+  const known = METRIC_OPTIONS.some(m => m.value === q.metric)
+  if (!known) {
+    toast.add({ severity: 'warn', summary: 'Неизвестный показатель', life: 3500 })
+    return false
+  }
+  preset.value = 'composition'
+  criteria.metric = q.metric as MetricKey
+  criteria.period = typeof q.period === 'string' ? q.period : null
+  return true
+}
 
 onMounted(() => {
   loadManagers()
   loadTemplates()
+  applyQueryComposition()
   runPreview()
 })
 </script>
@@ -323,12 +441,29 @@ onMounted(() => {
     <p class="preset-hint">
       {{ preset === 'debtors'
         ? 'Кого взыскивать: должники с приоритетом взыскания (долг × возраст × шанс возврата).'
-        : 'Кто соскальзывает в долг: собираемость, дисциплина и тренд по активным подписчикам.' }}
+        : preset === 'discipline'
+        ? 'Кто соскальзывает в долг: собираемость, дисциплина и тренд по активным подписчикам.'
+        : 'Состав KPI-плитки дашборда: какие клиенты и суммы попали в показатель. Контрольная сумма в шапке должна совпадать с плиткой.' }}
     </p>
 
     <!-- Панель критериев -->
     <div class="criteria-card">
       <div class="criteria-grid">
+        <label v-if="preset === 'composition'" class="field">
+          <span>Показатель</span>
+          <Select v-model="criteria.metric" :options="METRIC_OPTIONS"
+                  optionLabel="label" optionValue="value"
+                  placeholder="выберите" />
+        </label>
+        <label v-if="preset === 'composition' && metricPeriodKind(criteria.metric) !== 'none'"
+               class="field">
+          <span>Период</span>
+          <DatePicker
+            v-model="periodDate"
+            :view="metricPeriodKind(criteria.metric) === 'year' ? 'year' : 'month'"
+            :dateFormat="metricPeriodKind(criteria.metric) === 'year' ? 'yy' : 'mm/yy'"
+            showButtonBar />
+        </label>
         <label class="field">
           <span>Период с</span>
           <DatePicker v-model="criteria.period_from" view="month" dateFormat="mm/yy"
@@ -429,7 +564,13 @@ onMounted(() => {
     >
       <template #empty>Нет строк по заданным критериям.</template>
       <template #header>
-        <span class="row-count">Строк: {{ total }}</span>
+        <div class="table-header-bar">
+          <span class="row-count">Строк: {{ total }}</span>
+          <span v-if="preset === 'composition' && controlValue !== null" class="control-value">
+            Контроль:
+            <b>{{ formatControlValue(controlValue) }}</b>
+          </span>
+        </div>
       </template>
       <Column
         v-for="col in columns"
@@ -579,6 +720,15 @@ onMounted(() => {
   font-weight: 600;
   color: #475569;
 }
+
+.table-header-bar {
+  display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+}
+.control-value {
+  margin-left: auto;
+  font-size: 0.85rem; color: #475569;
+}
+.control-value b { color: #0f172a; font-weight: 700; }
 
 .dialog-field {
   display: flex;
