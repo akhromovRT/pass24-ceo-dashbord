@@ -5,6 +5,38 @@
 
 ## Записи
 
+### 2026-05-13 — User management feature + akhromov admin + backlog
+
+**Что сделано:**
+- **Backend API:**
+  - `POST /api/v1/auth/change-password` — любой пользователь меняет свой пароль (требует current_password + new_password ≥ 8 символов)
+  - `GET /api/v1/auth/me` — возвращает информацию о текущем пользователе
+  - `GET/POST /api/v1/users` + `POST /api/v1/users/{id}/reset-password` — admin-only (role guard через `require_admin`)
+  - `require_admin` dependency в `auth.py` (HTTP 403 если `role != admin`)
+- **CLI `backend/scripts/manage_users.py`:** list / create / reset-password / set-role / (de)activate. Запуск через `docker exec -it $(docker ps -qf name=backend) python scripts/manage_users.py ...`. Для emergency-операций без UI.
+- **Frontend:**
+  - `views/ProfileView.vue` — информация о пользователе + смена пароля
+  - `views/UsersView.vue` — admin-only: таблица пользователей, кнопки «Создать», «Сбросить пароль», диалог с одноразовым показом сгенерированного пароля
+  - `components/Sidebar.vue` — блок с именем/ролью текущего пользователя (клик → /profile), ссылка «Пользователи» для admin
+  - `stores/auth.ts` — `user`, `isAdmin`, `fetchMe`, `changePassword`
+  - `router.ts` — `/profile`, `/users` (с `requiresAdmin` meta)
+- **Тесты:** 11 новых в `test_users_api.py` (admin-only enforcement, password validation, generated/explicit password paths, duplicate detection, change-password flow). Total: 81 passed, 9 skipped.
+- **Применение:**
+  - admin@onvi-service.ru пароль сброшен (новый в `~/.config/ceo24/credentials`)
+  - akhromov@pass24online.ru создан с ролью admin (пароль там же)
+- **Документация:** `agent_docs/backlog.md` — собран бэклог рекомендаций (P3 фичи, инфра, качество, безопасность, идеи). `agent_docs/index.md` обновлён ссылкой на backlog и информацией о пользователях.
+
+**Известный нюанс:** EmailStr (pydantic) требует `email-validator` пакета (не установлен), заменено на regex-валидацию через `field_validator`. Если позже нужна полная RFC-валидация — добавить `pydantic[email]` в зависимости.
+
+**Что в backlog (приоритеты для P3):**
+- P3.1 сверка платежей с банком — первый кандидат
+- P3.2 прогноз MRR
+- P3.3 реальные роли manager/viewer
+- P3.4 алерты по расписанию (cron)
+- + инфра/безопасность/качество: frontend healthcheck, UptimeRobot, S3-backup, rate-limit на /auth/login, audit log
+
+**Следующий шаг:** UptimeRobot (5 мин, на стороне пользователя через web-UI), затем P3.1 (сверка платежей).
+
 ### 2026-03-04 — Инициализация проекта
 
 **Что сделано:**

@@ -9,37 +9,54 @@
 
 ## Записи
 
-### 2026-05-13 — User management feature + akhromov admin + backlog
+### 2026-05-20 — Drill-down KPI-плиток Dashboard в раздел «Отчёты»
+
+**Контекст:** руководителю нужно видеть «откуда взялось число» на каждой
+KPI-плитке Dashboard — какие клиенты и суммы формируют MRR факт, план,
+сбор за текущий месяц, активных, новых за год/месяц, отток.
+
+**Спецификация/план:** `docs/superpowers/specs/2026-05-20-dashboard-drilldown-design.md`,
+`docs/superpowers/plans/2026-05-20-dashboard-drilldown.md`.
 
 **Что сделано:**
-- **Backend API:**
-  - `POST /api/v1/auth/change-password` — любой пользователь меняет свой пароль (требует current_password + new_password ≥ 8 символов)
-  - `GET /api/v1/auth/me` — возвращает информацию о текущем пользователе
-  - `GET/POST /api/v1/users` + `POST /api/v1/users/{id}/reset-password` — admin-only (role guard через `require_admin`)
-  - `require_admin` dependency в `auth.py` (HTTP 403 если `role != admin`)
-- **CLI `backend/scripts/manage_users.py`:** list / create / reset-password / set-role / (de)activate. Запуск через `docker exec -it $(docker ps -qf name=backend) python scripts/manage_users.py ...`. Для emergency-операций без UI.
-- **Frontend:**
-  - `views/ProfileView.vue` — информация о пользователе + смена пароля
-  - `views/UsersView.vue` — admin-only: таблица пользователей, кнопки «Создать», «Сбросить пароль», диалог с одноразовым показом сгенерированного пароля
-  - `components/Sidebar.vue` — блок с именем/ролью текущего пользователя (клик → /profile), ссылка «Пользователи» для admin
-  - `stores/auth.ts` — `user`, `isAdmin`, `fetchMe`, `changePassword`
-  - `router.ts` — `/profile`, `/users` (с `requiresAdmin` meta)
-- **Тесты:** 11 новых в `test_users_api.py` (admin-only enforcement, password validation, generated/explicit password paths, duplicate detection, change-password flow). Total: 81 passed, 9 skipped.
-- **Применение:**
-  - admin@onvi-service.ru пароль сброшен (новый в `~/.config/ceo24/credentials`)
-  - akhromov@pass24online.ru создан с ролью admin (пароль там же)
-- **Документация:** `agent_docs/backlog.md` — собран бэклог рекомендаций (P3 фичи, инфра, качество, безопасность, идеи). `agent_docs/index.md` обновлён ссылкой на backlog и информацией о пользователях.
+- **Рефакторинг:** общие helpers расчёта KPI вынесены в
+  `app/services/dashboard_service.py` (`plan_mrr_total`,
+  `collected_by_charge_month`, `accrued_by_month`, `first_pay_rows`,
+  `last_pay_rows`, `excl`, `to_float`, `months_back`). Dashboard и
+  drill-down считают из одной точки.
+- **Backend:** новый пресет `composition` в `/reports` с параметрами
+  `metric` и `period`. Builder `composition_service.py` реализует 8
+  метрик: `mrr_fact`, `collected_current`, `mrr_plan`, `active_clients`,
+  `new_paid_curr_year/prev_month/curr_month`, `stopped_since_year_start`.
+  Ответ `/preview` для composition содержит `control_value` — ₽ для
+  денежных метрик, count для количественных. Явный guard для
+  `metric=None` (HTTP 400 с понятным сообщением).
+- **Frontend:** `KpiTile` получил опциональный prop `to: RouteLocationRaw`
+  (становится router-link с hover-эффектом). DashboardView навешивает
+  `:to="compositionLink(metric, period)"` на 8 плиток. Плитки «Долг»
+  (drill-down через aging-чарт) и «Churn rate» (производная) — без `:to`.
+  ReportsView парсит `?preset=composition&metric=...&period=...` на mount,
+  показывает в шапке таблицы контрольную сумму, скрывает дебитор-специфичные
+  фильтры для composition, при ручной смене пресета очищает query из URL.
+- **Инвариант:** `test_composition_matches_dashboard.py` — 8 тестов,
+  для каждой метрики проверяет, что `dashboard.summary[metric] ==
+  composition.control_value`. Контракт регрессии: пока тесты зелёные,
+  drill-down не разъезжается с плитками. Прошёл с первого запуска без
+  правок логики.
 
-**Известный нюанс:** EmailStr (pydantic) требует `email-validator` пакета (не установлен), заменено на regex-валидацию через `field_validator`. Если позже нужна полная RFC-валидация — добавить `pydantic[email]` в зависимости.
+**Тесты:** backend 173 → **209 passed**, 9 skipped (+36 тестов: 3 регресс
+на dashboard_service, 10 unit на composition по метрикам, 8 invariant,
+5 API + scaffolding-кейсы). Frontend: `vue-tsc` чисто, `vite build`
+успешен. ruff чисто.
 
-**Что в backlog (приоритеты для P3):**
-- P3.1 сверка платежей с банком — первый кандидат
-- P3.2 прогноз MRR
-- P3.3 реальные роли manager/viewer
-- P3.4 алерты по расписанию (cron)
-- + инфра/безопасность/качество: frontend healthcheck, UptimeRobot, S3-backup, rate-limit на /auth/login, audit log
+**Миграции:** не требуются — все метрики из существующих таблиц.
 
-**Следующий шаг:** UptimeRobot (5 мин, на стороне пользователя через web-UI), затем P3.1 (сверка платежей).
+**Не сделано / отложено:**
+- Браузерная проверка на dev-сервере по чек-листу из плана (8 плиток,
+  очистка query, экспорт, шаблоны).
+- Деплой на production — после браузерной проверки.
+
+**Следующий шаг:** браузерный smoke-тест drill-down, деплой.
 
 ### 2026-05-13 — Инцидент: восстановление + security hotfix + reliability + persistent БД (P0/P1/P2)
 
