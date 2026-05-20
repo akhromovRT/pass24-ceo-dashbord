@@ -24,6 +24,16 @@ from app.models import (
     PaymentAllocation,
 )
 from app.services.aging import debt_aging
+from app.services.dashboard_service import (
+    accrued_by_month,
+    collected_by_charge_month,
+    excl as _excl,
+    first_pay_rows as _first_pay_rows_q,
+    last_pay_rows as _last_pay_rows_q,
+    months_back as _months_back,
+    plan_mrr_total as _plan_mrr_total,
+    to_float as _f,
+)
 
 router = APIRouter(
     prefix="/dashboard", tags=["dashboard"],
@@ -31,66 +41,6 @@ router = APIRouter(
 )
 
 _PAYMENTS_CONTRACT = "1C-PAYMENTS"
-
-
-def _excl():
-    return Organization.excluded_from_analytics == False  # noqa: E712
-
-
-def _months_back(n: int) -> list[tuple[int, int]]:
-    today = date.today()
-    out, y, m = [], today.year, today.month
-    for _ in range(n):
-        out.append((y, m))
-        m -= 1
-        if m == 0:
-            m = 12
-            y -= 1
-    return list(reversed(out))
-
-
-def _f(x) -> float:
-    if x is None:
-        return 0.0
-    return float(x)
-
-
-def _plan_mrr_total(session: Session) -> float:
-    """План MRR: сумма Organization.monthly_ap по активным клиентам."""
-    v = session.exec(
-        select(func.coalesce(func.sum(Organization.monthly_ap), 0))
-        .where(_excl(), Organization.status == OrgStatus.ACTIVE)
-    ).one()
-    return _f(v)
-
-
-# --- AR-леджер: начисления и сбор -------------------------------------------
-
-def _accrued_by_month(session: Session) -> dict[tuple[int, int], float]:
-    """Σ начислений (monthly_charge.amount) по месяцам, неисключённые клиенты."""
-    rows = session.exec(
-        select(MonthlyCharge.year, MonthlyCharge.month,
-               func.coalesce(func.sum(MonthlyCharge.amount), 0))
-        .select_from(MonthlyCharge)
-        .join(Organization, Organization.id == MonthlyCharge.organization_id)
-        .where(_excl())
-        .group_by(MonthlyCharge.year, MonthlyCharge.month)
-    ).all()
-    return {(int(y), int(m)): _f(s) for y, m, s in rows}
-
-
-def _collected_by_charge_month(session: Session) -> dict[tuple[int, int], float]:
-    """Σ аллокаций по месяцу НАЧИСЛЕНИЯ — сколько собрано за период."""
-    rows = session.exec(
-        select(MonthlyCharge.year, MonthlyCharge.month,
-               func.coalesce(func.sum(PaymentAllocation.allocated_amount), 0))
-        .select_from(PaymentAllocation)
-        .join(MonthlyCharge, MonthlyCharge.id == PaymentAllocation.monthly_charge_id)
-        .join(Organization, Organization.id == MonthlyCharge.organization_id)
-        .where(_excl())
-        .group_by(MonthlyCharge.year, MonthlyCharge.month)
-    ).all()
-    return {(int(y), int(m)): _f(s) for y, m, s in rows}
 
 
 # --- эндпоинты --------------------------------------------------------------
@@ -103,8 +53,8 @@ def dashboard_summary(session: Session = Depends(get_session)):
     prev_y, prev_m = (today.year, today.month - 1) if today.month > 1 else (today.year - 1, 12)
     prev2_y, prev2_m = (prev_y, prev_m - 1) if prev_m > 1 else (prev_y - 1, 12)
 
-    collected = _collected_by_charge_month(session)
-    accrued = _accrued_by_month(session)
+    collected = collected_by_charge_month(session)
+    accrued = accrued_by_month(session)
     fact_mrr = collected.get((prev_y, prev_m), 0.0)
     fact_mrr_prev = collected.get((prev2_y, prev2_m), 0.0)
 
@@ -169,22 +119,8 @@ def dashboard_summary(session: Session = Depends(get_session)):
 
     # --- метрики клиентской базы --------------------------------------------
     year_start = date(today.year, 1, 1)
-    first_pay_rows = session.exec(
-        select(Document.organization_id, func.min(Document.doc_date))
-        .select_from(Document)
-        .join(Organization, Organization.id == Document.organization_id)
-        .where(_excl(), Document.doc_type == DocType.PAYMENT,
-               Document.doc_date.is_not(None))  # type: ignore[union-attr]
-        .group_by(Document.organization_id)
-    ).all()
-    last_pay_rows = session.exec(
-        select(Document.organization_id, func.max(Document.doc_date))
-        .select_from(Document)
-        .join(Organization, Organization.id == Document.organization_id)
-        .where(_excl(), Document.doc_type == DocType.PAYMENT,
-               Document.doc_date.is_not(None))  # type: ignore[union-attr]
-        .group_by(Document.organization_id)
-    ).all()
+    first_pay_rows = _first_pay_rows_q(session)
+    last_pay_rows = _last_pay_rows_q(session)
     new_paid_prev_month = sum(
         1 for _oid, d in first_pay_rows
         if d is not None and d.year == prev_y and d.month == prev_m
@@ -262,7 +198,7 @@ def dashboard_summary(session: Session = Depends(get_session)):
 @router.get("/mrr-plan-vs-fact")
 def mrr_plan_vs_fact(months: int = 12, session: Session = Depends(get_session)):
     plan_mrr = _plan_mrr_total(session)
-    collected = _collected_by_charge_month(session)
+    collected = collected_by_charge_month(session)
     series = []
     for y, m in _months_back(months):
         fact = collected.get((y, m), 0.0)
@@ -279,8 +215,8 @@ def collection_trend(session: Session = Depends(get_session)):
     """Собираемость периода: за месяц M — accrued (Σ начислений) и collected
     (Σ аллокаций на начисления M, когда бы платёж ни пришёл). Только месяцы
     по текущий включительно — будущие авансовые начисления не показываются."""
-    accrued = _accrued_by_month(session)
-    collected = _collected_by_charge_month(session)
+    accrued = accrued_by_month(session)
+    collected = collected_by_charge_month(session)
     today = date.today()
     cur = (today.year, today.month)
     out = []
