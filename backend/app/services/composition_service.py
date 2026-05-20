@@ -128,6 +128,8 @@ _DISPATCH: dict = {}
 
 
 def build_composition_report(session: Session, c) -> list[dict]:
+    if c.metric is None:
+        raise ValueError("metric is required for composition preset")
     if c.metric not in _COLS_BY_METRIC:
         raise ValueError(f"unknown composition metric: {c.metric}")
     builder = _DISPATCH.get(c.metric)

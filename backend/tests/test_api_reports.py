@@ -225,3 +225,10 @@ def test_composition_unknown_metric_returns_400(client):
     resp = client.post("/api/v1/reports/composition/preview",
                         json={"metric": "bogus"})
     assert resp.status_code == 400
+
+
+def test_composition_missing_metric_returns_400(client):
+    """Запрос без metric → 400 с понятным сообщением."""
+    resp = client.post("/api/v1/reports/composition/preview", json={})
+    assert resp.status_code == 400
+    assert "metric is required" in resp.json()["detail"].lower()
