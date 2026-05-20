@@ -116,3 +116,21 @@ def test_mrr_plan_lists_active_subscribers(db_session: Session):
     rows = build_composition_report(db_session, criteria)
     assert {r["name"] for r in rows} == {"A", "B"}
     assert control_value_for("mrr_plan", rows) == 15000.0
+
+
+# --- collected_current ----------------------------------------------------
+
+
+def test_collected_current_reuses_mrr_fact_for_given_period(db_session: Session):
+    today = date.today()
+    org = _org(db_session, "40", name="A", status=OrgStatus.ACTIVE,
+               monthly_ap=Decimal("10000"))
+    ch = _charge(db_session, org, today.year, today.month, 10000)
+    _pay(db_session, org, ch, 7000, today.replace(day=1))
+
+    criteria = ReportCriteria(metric="collected_current",
+                              period=f"{today.year}-{today.month:02d}")
+    rows = build_composition_report(db_session, criteria)
+    assert len(rows) == 1
+    assert rows[0]["contribution"] == 7000.0
+    assert control_value_for("collected_current", rows) == 7000.0

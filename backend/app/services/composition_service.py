@@ -177,6 +177,7 @@ def _build_mrr_plan(session: Session, c) -> list[dict]:
 
 _DISPATCH: dict = {
     "mrr_fact": _build_mrr_fact,
+    "collected_current": _build_mrr_fact,
     "mrr_plan": _build_mrr_plan,
 }
 
