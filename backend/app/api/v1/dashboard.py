@@ -24,16 +24,14 @@ from app.models import (
     PaymentAllocation,
 )
 from app.services.aging import debt_aging
-from app.services.dashboard_service import (
-    accrued_by_month as _accrued_by_month,
-    collected_by_charge_month as _collected_by_charge_month,
-    excl as _excl,
-    first_pay_rows as _first_pay_rows_q,
-    last_pay_rows as _last_pay_rows_q,
-    months_back as _months_back,
-    plan_mrr_total as _plan_mrr_total,
-    to_float as _f,
-)
+from app.services.dashboard_service import accrued_by_month as _accrued_by_month
+from app.services.dashboard_service import collected_by_charge_month as _collected_by_charge_month
+from app.services.dashboard_service import excl as _excl
+from app.services.dashboard_service import first_pay_rows as _first_pay_rows_q
+from app.services.dashboard_service import last_pay_rows as _last_pay_rows_q
+from app.services.dashboard_service import months_back as _months_back
+from app.services.dashboard_service import plan_mrr_total as _plan_mrr_total
+from app.services.dashboard_service import to_float as _f
 
 router = APIRouter(
     prefix="/dashboard", tags=["dashboard"],

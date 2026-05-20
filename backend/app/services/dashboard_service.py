@@ -7,7 +7,11 @@ from datetime import date
 from sqlmodel import Session, func, select
 
 from app.models import (
-    DocType, Document, MonthlyCharge, Organization, OrgStatus,
+    DocType,
+    Document,
+    MonthlyCharge,
+    Organization,
+    OrgStatus,
     PaymentAllocation,
 )
 

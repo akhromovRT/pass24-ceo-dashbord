@@ -4,20 +4,22 @@ Backend для пресета composition в /reports. Для каждой ме�
 возвращает список клиентов, формирующих её значение, и поддерживает
 control_value — сумму/счёт, обязанную совпасть с плиткой Dashboard."""
 from datetime import date, timedelta
-from typing import TYPE_CHECKING
 
 from sqlmodel import Session, func, select
 
 from app.models import (
-    Organization, OrgStatus, MonthlyCharge, PaymentAllocation, User,
+    MonthlyCharge,
+    Organization,
+    OrgStatus,
+    PaymentAllocation,
+    User,
 )
 from app.services.dashboard_service import (
-    excl, first_pay_rows, last_pay_rows, to_float,
+    excl,
+    first_pay_rows,
+    last_pay_rows,
+    to_float,
 )
-
-if TYPE_CHECKING:
-    from app.services.report_service import ReportCriteria
-
 
 _RU_MONTHS = [
     "январь", "февраль", "март", "апрель", "май", "июнь",
