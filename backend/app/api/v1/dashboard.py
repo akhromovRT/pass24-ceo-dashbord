@@ -25,8 +25,8 @@ from app.models import (
 )
 from app.services.aging import debt_aging
 from app.services.dashboard_service import (
-    accrued_by_month,
-    collected_by_charge_month,
+    accrued_by_month as _accrued_by_month,
+    collected_by_charge_month as _collected_by_charge_month,
     excl as _excl,
     first_pay_rows as _first_pay_rows_q,
     last_pay_rows as _last_pay_rows_q,
@@ -53,8 +53,8 @@ def dashboard_summary(session: Session = Depends(get_session)):
     prev_y, prev_m = (today.year, today.month - 1) if today.month > 1 else (today.year - 1, 12)
     prev2_y, prev2_m = (prev_y, prev_m - 1) if prev_m > 1 else (prev_y - 1, 12)
 
-    collected = collected_by_charge_month(session)
-    accrued = accrued_by_month(session)
+    collected = _collected_by_charge_month(session)
+    accrued = _accrued_by_month(session)
     fact_mrr = collected.get((prev_y, prev_m), 0.0)
     fact_mrr_prev = collected.get((prev2_y, prev2_m), 0.0)
 
@@ -198,7 +198,7 @@ def dashboard_summary(session: Session = Depends(get_session)):
 @router.get("/mrr-plan-vs-fact")
 def mrr_plan_vs_fact(months: int = 12, session: Session = Depends(get_session)):
     plan_mrr = _plan_mrr_total(session)
-    collected = collected_by_charge_month(session)
+    collected = _collected_by_charge_month(session)
     series = []
     for y, m in _months_back(months):
         fact = collected.get((y, m), 0.0)
@@ -215,8 +215,8 @@ def collection_trend(session: Session = Depends(get_session)):
     """Собираемость периода: за месяц M — accrued (Σ начислений) и collected
     (Σ аллокаций на начисления M, когда бы платёж ни пришёл). Только месяцы
     по текущий включительно — будущие авансовые начисления не показываются."""
-    accrued = accrued_by_month(session)
-    collected = collected_by_charge_month(session)
+    accrued = _accrued_by_month(session)
+    collected = _collected_by_charge_month(session)
     today = date.today()
     cur = (today.year, today.month)
     out = []
