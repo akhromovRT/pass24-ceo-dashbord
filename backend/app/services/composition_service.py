@@ -122,9 +122,44 @@ def _org_row(o: Organization, managers: dict) -> dict:
     }
 
 
-# --- dispatcher (empty; metric builders will be added in Task 3-8) ----------
+# --- metric builders --------------------------------------------------------
 
-_DISPATCH: dict = {}
+
+def _build_mrr_fact(session: Session, c) -> list[dict]:
+    period = _parse_month(c.period)
+    if period is None:
+        return []
+    y, m = period
+    contrib_rows = session.exec(
+        select(MonthlyCharge.organization_id,
+               func.coalesce(func.sum(PaymentAllocation.allocated_amount), 0))
+        .select_from(PaymentAllocation)
+        .join(MonthlyCharge, MonthlyCharge.id == PaymentAllocation.monthly_charge_id)
+        .join(Organization, Organization.id == MonthlyCharge.organization_id)
+        .where(excl(), MonthlyCharge.year == y, MonthlyCharge.month == m)
+        .group_by(MonthlyCharge.organization_id)
+    ).all()
+    contrib = {oid: to_float(s) for oid, s in contrib_rows if to_float(s) > 0}
+    if not contrib:
+        return []
+    org_query = select(Organization).where(Organization.id.in_(list(contrib)))  # type: ignore[union-attr]
+    org_query = _apply_org_filters(org_query, c)
+    orgs = list(session.exec(org_query).all())
+    managers = _managers(session)
+    out: list[dict] = []
+    for o in orgs:
+        row = _org_row(o, managers)
+        row["contribution"] = round(contrib[o.id], 2)
+        out.append(row)
+    out.sort(key=lambda r: r["contribution"], reverse=True)
+    return out
+
+
+# --- dispatcher -------------------------------------------------------------
+
+_DISPATCH: dict = {
+    "mrr_fact": _build_mrr_fact,
+}
 
 
 def build_composition_report(session: Session, c) -> list[dict]:
