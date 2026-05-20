@@ -205,3 +205,31 @@ def test_new_paid_curr_month(db_session: Session):
     rows = build_composition_report(db_session, criteria)
     assert {r["name"] for r in rows} == {"A-curr-m"}
     assert control_value_for("new_paid_curr_month", rows) == 1
+
+
+# --- stopped_since_year_start ---------------------------------------------
+
+
+def test_stopped_since_year_start(db_session: Session):
+    today = date.today()
+    year_start = date(today.year, 1, 1)
+    long_ago = today - timedelta(days=70)  # > 60 дней назад
+
+    a = _org(db_session, "90", name="A-stopped", status=OrgStatus.ACTIVE)
+    b = _org(db_session, "91", name="B-active", status=OrgStatus.ACTIVE)
+    ch_a = _charge(db_session, a, long_ago.year, long_ago.month, 100)
+    ch_b = _charge(db_session, b, today.year, today.month, 100)
+    _pay(db_session, a, ch_a, 100, long_ago)
+    _pay(db_session, b, ch_b, 100, today.replace(day=1))
+
+    criteria = ReportCriteria(metric="stopped_since_year_start")
+    rows = build_composition_report(db_session, criteria)
+    if long_ago >= year_start:
+        assert {r["name"] for r in rows} == {"A-stopped"}
+        row = rows[0]
+        assert row["last_payment_date"] == long_ago.isoformat()
+        assert row["days_since_last"] >= 60
+        assert control_value_for("stopped_since_year_start", rows) == 1
+    else:
+        # 70 дней назад = прошлый год — клиент не попадает в диапазон
+        assert rows == []

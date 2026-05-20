@@ -237,6 +237,30 @@ def _build_new_paid_curr_month(session: Session, c) -> list[dict]:
     return _build_new_paid_in_month(session, c, today.year, today.month)
 
 
+def _build_stopped(session: Session, c) -> list[dict]:
+    today = date.today()
+    year_start = date(today.year, 1, 1)
+    cutoff_60 = today - timedelta(days=60)
+    last_pay = dict(last_pay_rows(session))
+    target_ids = {oid for oid, d in last_pay.items()
+                  if d and year_start <= d <= cutoff_60}
+    if not target_ids:
+        return []
+    base = select(Organization).where(Organization.id.in_(list(target_ids)))  # type: ignore[union-attr]
+    base = _apply_org_filters(base, c)
+    orgs = list(session.exec(base).all())
+    managers = _managers(session)
+    out: list[dict] = []
+    for o in orgs:
+        row = _org_row(o, managers)
+        lp = last_pay.get(o.id)
+        row["last_payment_date"] = lp.isoformat() if lp else None
+        row["days_since_last"] = (today - lp).days if lp else None
+        out.append(row)
+    out.sort(key=lambda r: r.get("days_since_last") or 0, reverse=True)
+    return out
+
+
 # --- dispatcher -------------------------------------------------------------
 
 _DISPATCH: dict = {
@@ -247,6 +271,7 @@ _DISPATCH: dict = {
     "new_paid_curr_year": _build_new_paid_curr_year,
     "new_paid_prev_month": _build_new_paid_prev_month,
     "new_paid_curr_month": _build_new_paid_curr_month,
+    "stopped_since_year_start": _build_stopped,
 }
 
 
