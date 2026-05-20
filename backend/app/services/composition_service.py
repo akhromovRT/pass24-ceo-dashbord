@@ -1,0 +1,161 @@
+"""Состав KPI-показателя дашборда (drill-down).
+
+Backend для пресета composition в /reports. Для каждой метрики
+возвращает список клиентов, формирующих её значение, и поддерживает
+control_value — сумму/счёт, обязанную совпасть с плиткой Dashboard."""
+from datetime import date, timedelta
+from typing import TYPE_CHECKING
+
+from sqlmodel import Session, func, select
+
+from app.models import (
+    Organization, OrgStatus, MonthlyCharge, PaymentAllocation, User,
+)
+from app.services.dashboard_service import (
+    excl, first_pay_rows, last_pay_rows, to_float,
+)
+
+if TYPE_CHECKING:
+    from app.services.report_service import ReportCriteria
+
+
+_RU_MONTHS = [
+    "январь", "февраль", "март", "апрель", "май", "июнь",
+    "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь",
+]
+
+# --- каталог колонок ---------------------------------------------------------
+
+COMPOSITION_COLUMNS: list[tuple[str, str]] = [
+    ("name", "Клиент"),
+    ("inn", "ИНН"),
+    ("manager", "Менеджер"),
+    ("monthly_ap", "АП/мес"),
+    ("status", "Статус"),
+    ("city", "Город"),
+    ("contribution", "Вклад в показатель, ₽"),
+    ("first_payment_date", "Дата первого платежа"),
+    ("last_payment_date", "Дата последнего платежа"),
+    ("days_since_last", "Дней с последнего платежа"),
+]
+
+_BASE_COLS = ["name", "inn", "manager", "monthly_ap", "status", "city"]
+
+_COLS_BY_METRIC: dict[str, list[str]] = {
+    "mrr_fact":                 _BASE_COLS + ["contribution"],
+    "collected_current":        _BASE_COLS + ["contribution"],
+    "mrr_plan":                 _BASE_COLS + ["contribution"],
+    "active_clients":           _BASE_COLS + ["last_payment_date"],
+    "new_paid_curr_year":       _BASE_COLS + ["first_payment_date"],
+    "new_paid_prev_month":      _BASE_COLS + ["first_payment_date"],
+    "new_paid_curr_month":      _BASE_COLS + ["first_payment_date"],
+    "stopped_since_year_start": _BASE_COLS + ["last_payment_date", "days_since_last"],
+}
+
+MONEY_METRICS = {"mrr_fact", "collected_current", "mrr_plan"}
+
+_STATUS_LABELS = {
+    OrgStatus.ACTIVE: "Активен",
+    OrgStatus.CHURNED: "Отток",
+    OrgStatus.SUSPENDED: "Приостановлен",
+    OrgStatus.PROSPECT: "Потенциальный",
+}
+
+
+def _parse_month(s: str | None) -> tuple[int, int] | None:
+    if not s or "-" not in s:
+        return None
+    try:
+        y, m = s.split("-")[:2]
+        yi, mi = int(y), int(m)
+        if 1 <= mi <= 12:
+            return (yi, mi)
+    except ValueError:
+        return None
+    return None
+
+
+def _ru_month_label(period: tuple[int, int] | None) -> str:
+    if not period:
+        return ""
+    y, m = period
+    return f"{_RU_MONTHS[m - 1]} {y}"
+
+
+def _contribution_header(metric: str, period: tuple[int, int] | None) -> str:
+    if metric in ("mrr_fact", "collected_current"):
+        return f"Собрано за {_ru_month_label(period)}, ₽" if period else "Собрано, ₽"
+    if metric == "mrr_plan":
+        return "АП/мес, ₽"
+    return "Вклад в показатель, ₽"
+
+
+def _managers(session: Session) -> dict:
+    return {u.id: u.name for u in session.exec(select(User)).all()}
+
+
+def _apply_org_filters(query, c):
+    """Общие фильтры (excluded, manager, city, statuses) на запрос Organization."""
+    if not c.include_excluded:
+        query = query.where(excl())
+    if c.manager_id:
+        query = query.where(Organization.manager_id == c.manager_id)
+    if c.city:
+        query = query.where(
+            func.lower(Organization.city_region).like(f"%{c.city.lower()}%")
+        )
+    statuses = [OrgStatus(s) for s in c.statuses
+                if s in OrgStatus._value2member_map_]
+    if statuses:
+        query = query.where(Organization.status.in_(statuses))  # type: ignore[union-attr]
+    return query
+
+
+def _org_row(o: Organization, managers: dict) -> dict:
+    return {
+        "name": o.name_display or o.name_1c,
+        "inn": o.inn,
+        "manager": managers.get(o.manager_id, "—"),
+        "monthly_ap": round(to_float(o.monthly_ap), 2) if o.monthly_ap else None,
+        "status": _STATUS_LABELS.get(o.status, str(o.status)),
+        "city": o.city_region or "—",
+    }
+
+
+# --- dispatcher (empty; metric builders will be added in Task 3-8) ----------
+
+_DISPATCH: dict = {}
+
+
+def build_composition_report(session: Session, c) -> list[dict]:
+    if c.metric not in _COLS_BY_METRIC:
+        raise ValueError(f"unknown composition metric: {c.metric}")
+    builder = _DISPATCH.get(c.metric)
+    if builder is None:
+        return []  # зарегистрировано в каталоге, ещё не реализовано
+    return builder(session, c)
+
+
+def control_value_for(metric: str, rows: list[dict]) -> float | int:
+    if metric in MONEY_METRICS:
+        return round(sum(float(r.get("contribution") or 0) for r in rows), 2)
+    return len(rows)
+
+
+def columns_for_composition(c) -> list[tuple[str, str]]:
+    if c.metric not in _COLS_BY_METRIC:
+        return COMPOSITION_COLUMNS
+    period = (_parse_month(c.period)
+              if c.metric in ("mrr_fact", "collected_current") else None)
+    keys = _COLS_BY_METRIC[c.metric]
+    if c.columns:
+        chosen = set(c.columns)
+        filtered = [k for k in keys if k in chosen]
+        keys = filtered or keys
+    catalog = dict(COMPOSITION_COLUMNS)
+    out: list[tuple[str, str]] = []
+    for k in keys:
+        header = (_contribution_header(c.metric, period)
+                  if k == "contribution" else catalog[k])
+        out.append((k, header))
+    return out

@@ -89,7 +89,10 @@ def report_preview(
     session: Session = Depends(get_session),
 ):
     _check_type(report_type)
-    rows = build_report(report_type, session, criteria)
+    try:
+        rows = build_report(report_type, session, criteria)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     columns = columns_for(report_type, criteria)
     return {
         "columns": [{"key": key, "header": header} for key, header in columns],
@@ -105,7 +108,10 @@ def report_export(
     session: Session = Depends(get_session),
 ):
     _check_type(report_type)
-    rows = build_report(report_type, session, criteria)
+    try:
+        rows = build_report(report_type, session, criteria)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     columns = columns_for(report_type, criteria)
     content = report_to_xlsx(report_type, columns, rows)
     filename = f"{report_type}-{date.today().isoformat()}.xlsx"

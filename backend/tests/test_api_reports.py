@@ -206,3 +206,22 @@ def test_template_rejects_unknown_type(client):
         "name": "bad", "report_type": "nope", "criteria": {},
     })
     assert resp.status_code == 404
+
+
+# --- пресет «состав показателя» ---------------------------------------------
+
+
+def test_composition_preset_registered(client):
+    """Composition зарегистрирован; preview возвращает 200 даже на пустых данных."""
+    resp = client.post("/api/v1/reports/composition/preview",
+                        json={"metric": "mrr_plan"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["rows"] == []
+    assert body["total"] == 0
+
+
+def test_composition_unknown_metric_returns_400(client):
+    resp = client.post("/api/v1/reports/composition/preview",
+                        json={"metric": "bogus"})
+    assert resp.status_code == 400

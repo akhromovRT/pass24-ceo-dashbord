@@ -23,6 +23,10 @@ from app.models import (
     User,
 )
 from app.services.aging import aging_index
+from app.services.composition_service import (
+    build_composition_report,
+    columns_for_composition,
+)
 
 # --- критерии ---------------------------------------------------------------
 
@@ -44,6 +48,9 @@ class ReportCriteria(BaseModel):
     columns: list[str] = []
     sort_by: str | None = None
     sort_dir: str = "desc"
+    # только для пресета composition; остальные пресеты игнорируют через extra="ignore"
+    metric: str | None = None
+    period: str | None = None
 
 
 # --- каталоги колонок -------------------------------------------------------
@@ -82,6 +89,7 @@ DISCIPLINE_COLUMNS: list[tuple[str, str]] = [
 REPORTS: dict[str, dict] = {
     "debtors": {"title": "Реестр должников", "columns": DEBTORS_COLUMNS},
     "discipline": {"title": "Дисциплина платежей", "columns": DISCIPLINE_COLUMNS},
+    "composition": {"title": "Состав показателя", "columns": []},
 }
 
 STATUS_LABELS = {
@@ -400,6 +408,7 @@ def build_discipline_report(session: Session, c: ReportCriteria) -> list[dict]:
 _BUILDERS = {
     "debtors": build_debtors_report,
     "discipline": build_discipline_report,
+    "composition": build_composition_report,
 }
 
 
@@ -411,6 +420,8 @@ def build_report(report_type: str, session: Session, c: ReportCriteria) -> list[
 
 
 def columns_for(report_type: str, c: ReportCriteria) -> list[tuple[str, str]]:
+    if report_type == "composition":
+        return columns_for_composition(c)
     catalog = REPORTS[report_type]["columns"]
     if not c.columns:
         return catalog
