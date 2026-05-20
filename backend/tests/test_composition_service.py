@@ -157,3 +157,51 @@ def test_active_clients_lists_actives_with_last_payment(db_session: Session):
     assert a_row["last_payment_date"] == "2026-04-10"
     assert b_row["last_payment_date"] is None
     assert control_value_for("active_clients", rows) == 2
+
+
+# --- new_paid_* -----------------------------------------------------------
+
+
+def test_new_paid_curr_year(db_session: Session):
+    today = date.today()
+    this_year = today.year
+    a = _org(db_session, "60", name="A-this-year", status=OrgStatus.ACTIVE)
+    b = _org(db_session, "61", name="B-prev-year", status=OrgStatus.ACTIVE)
+    ch_a = _charge(db_session, a, this_year, 3, 100)
+    ch_b = _charge(db_session, b, this_year - 1, 6, 100)
+    _pay(db_session, a, ch_a, 100, date(this_year, 3, 15))
+    _pay(db_session, b, ch_b, 100, date(this_year - 1, 6, 20))
+
+    criteria = ReportCriteria(metric="new_paid_curr_year")
+    rows = build_composition_report(db_session, criteria)
+    assert {r["name"] for r in rows} == {"A-this-year"}
+    assert rows[0]["first_payment_date"] == f"{this_year}-03-15"
+    assert control_value_for("new_paid_curr_year", rows) == 1
+
+
+def test_new_paid_prev_month(db_session: Session):
+    today = date.today()
+    prev_y, prev_m = ((today.year, today.month - 1)
+                      if today.month > 1 else (today.year - 1, 12))
+    a = _org(db_session, "70", name="A-prev-m", status=OrgStatus.ACTIVE)
+    b = _org(db_session, "71", name="B-curr-m", status=OrgStatus.ACTIVE)
+    ch_a = _charge(db_session, a, prev_y, prev_m, 100)
+    ch_b = _charge(db_session, b, today.year, today.month, 100)
+    _pay(db_session, a, ch_a, 100, date(prev_y, prev_m, 5))
+    _pay(db_session, b, ch_b, 100, today.replace(day=1))
+
+    criteria = ReportCriteria(metric="new_paid_prev_month")
+    rows = build_composition_report(db_session, criteria)
+    assert {r["name"] for r in rows} == {"A-prev-m"}
+
+
+def test_new_paid_curr_month(db_session: Session):
+    today = date.today()
+    a = _org(db_session, "80", name="A-curr-m", status=OrgStatus.ACTIVE)
+    ch_a = _charge(db_session, a, today.year, today.month, 100)
+    _pay(db_session, a, ch_a, 100, today.replace(day=1))
+
+    criteria = ReportCriteria(metric="new_paid_curr_month")
+    rows = build_composition_report(db_session, criteria)
+    assert {r["name"] for r in rows} == {"A-curr-m"}
+    assert control_value_for("new_paid_curr_month", rows) == 1

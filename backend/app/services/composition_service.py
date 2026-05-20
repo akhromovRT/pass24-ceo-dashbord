@@ -189,6 +189,54 @@ def _build_active_clients(session: Session, c) -> list[dict]:
     return out
 
 
+def _materialize_first_pay(session: Session, c, target_ids: set,
+                           first_pay: dict) -> list[dict]:
+    if not target_ids:
+        return []
+    base = select(Organization).where(Organization.id.in_(list(target_ids)))  # type: ignore[union-attr]
+    base = _apply_org_filters(base, c)
+    orgs = list(session.exec(base).all())
+    managers = _managers(session)
+    out: list[dict] = []
+    for o in orgs:
+        row = _org_row(o, managers)
+        fp = first_pay.get(o.id)
+        row["first_payment_date"] = fp.isoformat() if fp else None
+        out.append(row)
+    out.sort(key=lambda r: r["first_payment_date"] or "", reverse=True)
+    return out
+
+
+def _build_new_paid_in_year(session: Session, c, year: int) -> list[dict]:
+    first_pay = dict(first_pay_rows(session))
+    target_ids = {oid for oid, d in first_pay.items()
+                  if d and d.year == year}
+    return _materialize_first_pay(session, c, target_ids, first_pay)
+
+
+def _build_new_paid_in_month(session: Session, c, year: int, month: int) -> list[dict]:
+    first_pay = dict(first_pay_rows(session))
+    target_ids = {oid for oid, d in first_pay.items()
+                  if d and d.year == year and d.month == month}
+    return _materialize_first_pay(session, c, target_ids, first_pay)
+
+
+def _build_new_paid_curr_year(session: Session, c) -> list[dict]:
+    return _build_new_paid_in_year(session, c, date.today().year)
+
+
+def _build_new_paid_prev_month(session: Session, c) -> list[dict]:
+    today = date.today()
+    if today.month > 1:
+        return _build_new_paid_in_month(session, c, today.year, today.month - 1)
+    return _build_new_paid_in_month(session, c, today.year - 1, 12)
+
+
+def _build_new_paid_curr_month(session: Session, c) -> list[dict]:
+    today = date.today()
+    return _build_new_paid_in_month(session, c, today.year, today.month)
+
+
 # --- dispatcher -------------------------------------------------------------
 
 _DISPATCH: dict = {
@@ -196,6 +244,9 @@ _DISPATCH: dict = {
     "collected_current": _build_mrr_fact,
     "mrr_plan": _build_mrr_plan,
     "active_clients": _build_active_clients,
+    "new_paid_curr_year": _build_new_paid_curr_year,
+    "new_paid_prev_month": _build_new_paid_prev_month,
+    "new_paid_curr_month": _build_new_paid_curr_month,
 }
 
 
