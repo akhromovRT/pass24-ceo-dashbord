@@ -232,3 +232,36 @@ def test_composition_missing_metric_returns_400(client):
     resp = client.post("/api/v1/reports/composition/preview", json={})
     assert resp.status_code == 400
     assert "metric is required" in resp.json()["detail"].lower()
+
+
+def test_composition_preview_returns_control_value(client, db_session: Session):
+    today = date.today()
+    org = _org(db_session, "7700000100", name="Платил",
+               status=OrgStatus.ACTIVE, monthly_ap=Decimal("10000"))
+    charge = _charge(db_session, org, today.year, today.month, 10000)
+    _pay(db_session, org, charge, 7500, today.replace(day=1))
+
+    resp = client.post(
+        "/api/v1/reports/composition/preview",
+        json={"metric": "collected_current",
+              "period": f"{today.year}-{today.month:02d}"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["control_value"] == 7500.0
+
+
+def test_composition_active_clients_control_value_is_count(client, db_session: Session):
+    _org(db_session, "7700000200", name="A", status=OrgStatus.ACTIVE)
+    _org(db_session, "7700000201", name="B", status=OrgStatus.ACTIVE)
+    _org(db_session, "7700000202", name="C", status=OrgStatus.CHURNED)
+
+    resp = client.post(
+        "/api/v1/reports/composition/preview",
+        json={"metric": "active_clients"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 2
+    assert body["control_value"] == 2

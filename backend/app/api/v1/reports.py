@@ -9,6 +9,7 @@ from sqlmodel import Session, col, select
 from app.api.v1.auth import get_current_user
 from app.core.database import get_session
 from app.models import ReportTemplate, User
+from app.services.composition_service import control_value_for
 from app.services.report_service import (
     REPORTS,
     ReportCriteria,
@@ -94,11 +95,14 @@ def report_preview(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     columns = columns_for(report_type, criteria)
-    return {
+    body = {
         "columns": [{"key": key, "header": header} for key, header in columns],
         "rows": rows,
         "total": len(rows),
     }
+    if report_type == "composition" and criteria.metric:
+        body["control_value"] = control_value_for(criteria.metric, rows)
+    return body
 
 
 @router.post("/{report_type}/export")
