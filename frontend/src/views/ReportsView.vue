@@ -104,6 +104,7 @@ const statusOptions = [
   { label: 'Активен', value: 'active' },
   { label: 'Приостановлен', value: 'suspended' },
   { label: 'Отток', value: 'churned' },
+  { label: 'Транзит', value: 'transit' },
   { label: 'Потенциальный', value: 'prospect' },
 ]
 const bucketOptions = ['0-30', '31-60', '61-90', '90+']

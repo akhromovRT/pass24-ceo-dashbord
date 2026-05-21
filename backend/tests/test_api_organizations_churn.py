@@ -10,8 +10,14 @@ from app.api.v1.auth import get_current_user
 from app.core.database import get_session
 from app.main import app
 from app.models import (
-    Contract, ContractType, DocType, Document,
-    Organization, OrgStatus, User, UserRole,
+    Contract,
+    ContractType,
+    DocType,
+    Document,
+    Organization,
+    OrgStatus,
+    User,
+    UserRole,
 )
 
 
@@ -128,3 +134,39 @@ def test_patch_unrelated_field_does_not_clear_churn_month(
     body = resp.json()
     assert body["name_display"] == "Новое имя"
     assert body["churn_month"] == "2025-06-01"
+
+
+# --- TRANSIT — поведение зеркальное CHURNED ---------------------------------
+
+
+def test_active_to_transit_autosets_churn_month_from_last_payment(
+    client: TestClient, db_session: Session,
+):
+    """TRANSIT — это юр.лицо, переставшее платить за себя (переоформление
+    ИНН или транзитный плательщик). churn_month заполняется автоматически
+    так же как для CHURNED — это месяц последнего платежа."""
+    _org_with_payment(db_session, last_payment_date=date(2025, 8, 20))
+    resp = client.patch(
+        "/api/v1/organizations/7700001234", json={"status": "transit"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "transit"
+    assert body["churn_month"] == "2025-08-01"
+
+
+def test_transit_to_active_clears_churn_month(
+    client: TestClient, db_session: Session,
+):
+    """Откат из TRANSIT в ACTIVE сбрасывает churn_month — клиент снова платит."""
+    org = _org_with_payment(db_session, last_payment_date=date(2025, 6, 15))
+    org.status = OrgStatus.TRANSIT
+    org.churn_month = date(2025, 6, 1)
+    db_session.add(org)
+    db_session.commit()
+
+    resp = client.patch(
+        "/api/v1/organizations/7700001234", json={"status": "active"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["churn_month"] is None

@@ -24,6 +24,10 @@ class OrgStatus(str, enum.Enum):
     CHURNED = "churned"
     SUSPENDED = "suspended"
     PROSPECT = "prospect"
+    # Юр.лицо, ранее платившее за другого клиента (или старая карточка
+    # после переоформления ИНН). После даты последнего платежа начисления
+    # прекращаются, в active_clients и churn-rate не учитывается.
+    TRANSIT = "transit"
 
 
 class Organization(SQLModel, table=True):

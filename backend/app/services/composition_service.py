@@ -63,6 +63,7 @@ _STATUS_LABELS = {
     OrgStatus.CHURNED: "Отток",
     OrgStatus.SUSPENDED: "Приостановлен",
     OrgStatus.PROSPECT: "Потенциальный",
+    OrgStatus.TRANSIT: "Транзит",
 }
 
 

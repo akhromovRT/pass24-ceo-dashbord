@@ -96,11 +96,14 @@ class ChargeService:
         Удаляет старые начисления клиента и строит заново. Приоритет —
         реальная 1С-Реализация, синтетика из тарифа — для пропусков.
 
-        Для клиента в статусе CHURNED с заполненным churn_month верхняя
-        граница period подрезается до churn_month — после месяца отключения
-        начисления не создаются и долг не накапливается."""
+        Для клиента в статусе CHURNED или TRANSIT с заполненным churn_month
+        верхняя граница period подрезается до churn_month — после месяца
+        отключения начисления не создаются и долг не накапливается.
+        TRANSIT — это юр.лицо, переставшее платить (переоформление ИНН,
+        транзитный плательщик за другого клиента)."""
         org = self.session.get(Organization, org_id)
-        if (org is not None and org.status == OrgStatus.CHURNED
+        if (org is not None
+                and org.status in (OrgStatus.CHURNED, OrgStatus.TRANSIT)
                 and org.churn_month is not None):
             if org.churn_month < start:
                 # Месяц отключения раньше точки начала ленты — лента пуста.

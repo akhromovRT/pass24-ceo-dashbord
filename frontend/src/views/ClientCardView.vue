@@ -72,6 +72,7 @@ const statusOptions = [
   { label: 'Активен', value: 'active' },
   { label: 'Приостановлен', value: 'suspended' },
   { label: 'Отток', value: 'churned' },
+  { label: 'Транзит', value: 'transit' },
   { label: 'Потенциальный', value: 'prospect' },
 ]
 const orgTypeOptions = [

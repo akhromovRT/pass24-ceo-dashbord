@@ -132,17 +132,25 @@ def dashboard_summary(session: Session = Depends(get_session)):
         1 for _oid, d in first_pay_rows
         if d is not None and d.year == today.year
     )
+    # TRANSIT — юр.лица, переставшие платить (переоформление ИНН либо
+    # транзитные плательщики за других клиентов). В отток их не учитываем.
+    transit_ids = set(session.exec(
+        select(Organization.id)
+        .where(Organization.status == OrgStatus.TRANSIT)
+    ).all())
     # перестали платить с начала года: последний платёж в этом году, >60 дней назад
     stopped_since_year_start = sum(
-        1 for _oid, d in last_pay_rows
-        if d is not None and year_start <= d <= cutoff_60
+        1 for oid, d in last_pay_rows
+        if d is not None and year_start <= d <= cutoff_60 and oid not in transit_ids
     )
     # база для churn rate — клиенты, у которых был платёж в прошлом году
+    # (TRANSIT исключены — они не клиенты сами, а плательщики за других)
     paying_base = session.exec(
         select(func.count()).select_from(
             select(Document.organization_id).distinct()
             .join(Organization, Organization.id == Document.organization_id)
             .where(_excl(), Document.doc_type == DocType.PAYMENT,
+                   Organization.status != OrgStatus.TRANSIT,
                    func.extract("year", Document.doc_date) == today.year - 1)
             .subquery()
         )

@@ -196,11 +196,14 @@ def update_organization(
     prev_churn_month = org.churn_month
     changes = payload.model_dump(exclude_unset=True)
 
-    # Логика churn_month вокруг смены статуса
+    # Логика churn_month вокруг смены статуса. CHURNED — клиент ушёл;
+    # TRANSIT — юр.лицо больше не платит за себя (переоформление ИНН либо
+    # был транзитным плательщиком за другого клиента). В обоих случаях
+    # начисления прекращаются с churn_month.
     new_status = changes.get("status", prev_status)
     churn_in_payload = "churn_month" in changes
 
-    if new_status == OrgStatus.CHURNED:
+    if new_status in (OrgStatus.CHURNED, OrgStatus.TRANSIT):
         if not churn_in_payload and prev_churn_month is None:
             auto = _last_payment_month(session, org.id)
             if auto is None:
