@@ -106,6 +106,18 @@
 
 ## Качество и DX
 
+### Применение шаблона composition в /reports теряет metric/period
+- Сохранённый шаблон пресета `composition` через дропдаун применяется частично: пресет
+  переключается, но `criteria.metric`/`criteria.period` не подхватываются — таблица
+  показывает строки прежнего пресета. Бэкенд при этом отдаёт шаблон корректно (через
+  API `/reports/templates` поля `metric`/`period` в JSON присутствуют).
+- Скорее всего race в `applyTemplate` / `watch(preset)` в `frontend/src/views/ReportsView.vue`:
+  одновременная установка `preset.value` (триггерит watch → runPreview) и
+  `criteria.metric` приводит к тому, что первый runPreview уходит без metric. Прямой
+  drill-down с дашборда (`?preset=composition&metric=...&period=...`) работает.
+- **Срок:** ~30 минут. **Fix:** перед `preset.value = ...` собрать всё criteria сразу;
+  либо `await nextTick()` между этапами; либо подавить watch при programmatic apply.
+
 ### Актуализация реестра — статусы и АП новых плательщиков 2026 🚧 in progress (since 2026-05-19)
 - Сверка отчёта менеджеров (Bitrix24 Диск, «Сводка по новым клиентам 2026.xlsx») с дашбордом
   выявила: из 21 нового плательщика 2026 только 4 переведены в статус «Активен» с заполненной
