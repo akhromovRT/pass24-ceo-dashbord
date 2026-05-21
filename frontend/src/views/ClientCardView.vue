@@ -55,8 +55,18 @@ const EDITABLE_KEYS = [
   'objects', 'object_type', 'system_number', 'equipment',
   'address', 'city_region', 'cloud_url', 'has_folder', 'doc_exchange',
   'monthly_ap', 'notes', 'in_registry', 'excluded_from_analytics',
-  'excluded_reason',
+  'excluded_reason', 'churn_month',
 ]
+
+const RU_MONTHS = [
+  'январь', 'февраль', 'март', 'апрель', 'май', 'июнь',
+  'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь',
+]
+function formatChurnMonth(val: string | null): string {
+  if (!val) return '—'
+  const d = new Date(val)
+  return `${RU_MONTHS[d.getMonth()]} ${d.getFullYear()}`
+}
 
 const statusOptions = [
   { label: 'Активен', value: 'active' },
@@ -144,9 +154,11 @@ function openEditor(payment: any) {
 function enterEdit() {
   const f: Record<string, any> = {}
   for (const k of EDITABLE_KEYS) {
-    f[k] = k === 'client_since' && org.value[k]
-      ? new Date(org.value[k])
-      : org.value[k]
+    if ((k === 'client_since' || k === 'churn_month') && org.value[k]) {
+      f[k] = new Date(org.value[k])
+    } else {
+      f[k] = org.value[k]
+    }
   }
   form.value = f
   editMode.value = true
@@ -160,7 +172,7 @@ async function save() {
   const patch: Record<string, any> = {}
   for (const k of EDITABLE_KEYS) {
     let v = form.value[k]
-    if (k === 'client_since' && v instanceof Date) {
+    if ((k === 'client_since' || k === 'churn_month') && v instanceof Date) {
       v = v.toISOString().slice(0, 10)
     }
     patch[k] = v
@@ -184,11 +196,24 @@ async function changeStatus(newStatus: string) {
   if (newStatus === prev) return
   org.value.status = newStatus
   try {
-    await store.updateOrganization(inn, { status: newStatus })
-    toast.add({ severity: 'success', summary: 'Статус обновлён', life: 2500 })
-  } catch {
+    const updated = await store.updateOrganization(inn, { status: newStatus })
+    if (updated) org.value = updated
+    await reloadLedger()
+    const msg = newStatus === 'churned' && updated?.churn_month
+      ? `Месяц отключения: ${formatChurnMonth(updated.churn_month)}`
+      : undefined
+    toast.add({
+      severity: 'success', summary: 'Статус обновлён',
+      detail: msg, life: 3500,
+    })
+  } catch (e: any) {
     org.value.status = prev
-    toast.add({ severity: 'error', summary: 'Не удалось сменить статус', life: 4000 })
+    const detail = e?.response?.data?.detail
+      || 'Изменения не сохранены'
+    toast.add({
+      severity: 'error', summary: 'Не удалось сменить статус',
+      detail, life: 6000,
+    })
   }
 }
 
@@ -234,6 +259,10 @@ const lineChartOption = computed(() => ({
             optionValue="value"
             @update:modelValue="changeStatus"
           />
+          <span v-if="org.status === 'churned'" class="churn-month-display"
+            :title="'Месяц последнего начисления абонплаты. После него клиент не накапливает долг.'">
+            Отключён: <b>{{ formatChurnMonth(org.churn_month) }}</b>
+          </span>
         </div>
         <div class="header-stats">
           <div class="stat">
@@ -298,6 +327,15 @@ const lineChartOption = computed(() => ({
                   <label>Клиент с</label>
                   <DatePicker v-if="editMode" v-model="form.client_since" dateFormat="dd.mm.yy" showIcon />
                   <span v-else>{{ formatDate(org.client_since) }}</span>
+                </div>
+                <div class="fld" v-if="org.status === 'churned'">
+                  <label>Месяц отключения
+                    <i class="pi pi-info-circle"
+                       title="Последний месяц начисления АП. После него клиент не накапливает долг." />
+                  </label>
+                  <DatePicker v-if="editMode" v-model="form.churn_month"
+                    view="month" dateFormat="mm/yy" showIcon />
+                  <span v-else>{{ formatChurnMonth(org.churn_month) }}</span>
                 </div>
               </div>
             </section>
@@ -605,6 +643,13 @@ const lineChartOption = computed(() => ({
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
+.churn-month-display {
+  margin-top: 0.25rem;
+  font-size: 0.78rem;
+  color: #b45309;
+  cursor: help;
+}
+.churn-month-display b { color: #92400e; }
 .header-stats {
   display: flex;
   gap: 1.5rem;

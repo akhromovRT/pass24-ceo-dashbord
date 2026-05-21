@@ -34,6 +34,7 @@ COMPOSITION_COLUMNS: list[tuple[str, str]] = [
     ("manager", "Менеджер"),
     ("monthly_ap", "АП/мес"),
     ("status", "Статус"),
+    ("churn_month", "Месяц отключения"),
     ("city", "Город"),
     ("contribution", "Вклад в показатель, ₽"),
     ("first_payment_date", "Дата первого платежа"),
@@ -41,7 +42,8 @@ COMPOSITION_COLUMNS: list[tuple[str, str]] = [
     ("days_since_last", "Дней с последнего платежа"),
 ]
 
-_BASE_COLS = ["name", "inn", "manager", "monthly_ap", "status", "city"]
+_BASE_COLS = ["name", "inn", "manager", "monthly_ap", "status",
+              "churn_month", "city"]
 
 _COLS_BY_METRIC: dict[str, list[str]] = {
     "mrr_fact":                 _BASE_COLS + ["contribution"],
@@ -120,6 +122,10 @@ def _org_row(o: Organization, managers: dict) -> dict:
         "manager": managers.get(o.manager_id, "—"),
         "monthly_ap": round(to_float(o.monthly_ap), 2) if o.monthly_ap else None,
         "status": _STATUS_LABELS.get(o.status, str(o.status)),
+        "churn_month": (
+            f"{_RU_MONTHS[o.churn_month.month - 1]} {o.churn_month.year}"
+            if o.churn_month else ""
+        ),
         "city": o.city_region or "—",
     }
 

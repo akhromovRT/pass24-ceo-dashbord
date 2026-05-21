@@ -11,6 +11,8 @@ from app.models import (
     DocType,
     Document,
     MonthlyCharge,
+    Organization,
+    OrgStatus,
     TariffPeriod,
 )
 
@@ -92,7 +94,22 @@ class ChargeService:
     def rebuild_for_organization(self, org_id, start: date, through: date) -> None:
         """Пересобирает monthly_charge клиента за [start, through].
         Удаляет старые начисления клиента и строит заново. Приоритет —
-        реальная 1С-Реализация, синтетика из тарифа — для пропусков."""
+        реальная 1С-Реализация, синтетика из тарифа — для пропусков.
+
+        Для клиента в статусе CHURNED с заполненным churn_month верхняя
+        граница period подрезается до churn_month — после месяца отключения
+        начисления не создаются и долг не накапливается."""
+        org = self.session.get(Organization, org_id)
+        if (org is not None and org.status == OrgStatus.CHURNED
+                and org.churn_month is not None):
+            if org.churn_month < start:
+                # Месяц отключения раньше точки начала ленты — лента пуста.
+                for c in self._charges(org_id):
+                    self.session.delete(c)
+                self.session.flush()
+                return
+            if org.churn_month < through:
+                through = org.churn_month
         for c in self._charges(org_id):
             self.session.delete(c)
         self.session.flush()

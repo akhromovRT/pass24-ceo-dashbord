@@ -43,6 +43,7 @@ def list_debtors(
             "total_debt": debt,
             "payment_score": o.payment_score,
             "status": o.status,
+            "churn_month": o.churn_month.isoformat() if o.churn_month else None,
             "manager_id": str(o.manager_id) if o.manager_id else None,
             "months_overdue": age,
             "aging_bucket": bucket,

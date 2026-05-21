@@ -9,6 +9,46 @@
 
 ## Записи
 
+### 2026-05-21 — churn_month: месяц отключения для CHURNED-клиентов
+
+**Контекст:** клиент в статусе «Отток» — это тот, кому мы перестали выставлять
+АП. Раньше начисления продолжали создаваться синтетически из тарифа, и долг
+такого клиента продолжал «расти» в дебиторке, что искажало картину.
+
+**Что сделано:**
+- **Модель:** в `Organization` добавлено поле `churn_month: date | None`
+  (1-е число месяца последнего начисления АП). Миграция
+  `b5d2e9a47c1f_add_churn_month_to_organizations`.
+- **ChargeService.rebuild_for_organization** для клиента `status==CHURNED`
+  и `churn_month is not None` подрезает `through = min(through, churn_month)`.
+  Если `churn_month < start` — лента пуста. Активные клиенты не затронуты:
+  для не-CHURNED поле игнорируется на этапе генерации (защита от ошибок).
+- **PATCH /organizations/{inn}:** Pydantic-валидатор нормализует день
+  `churn_month` к 1-му. При переходе ACTIVE → CHURNED без явного
+  `churn_month` — auto-fill месяцем последнего платежа клиента. Если
+  платежей нет — 400 «установите вручную». При CHURNED → ACTIVE —
+  очистка `churn_month`. Любое изменение `status` или `churn_month`
+  триггерит `ChargeService.rebuild_for_organization` +
+  `AllocationService.recompute_for_organization` только для этого клиента.
+- **Backfill-скрипт:** `backend/scripts/backfill_churn_months.py`.
+  Обрабатывает только CHURNED-клиентов с `churn_month IS NULL`. ACTIVE
+  никогда не затрагивает. Клиенты без платежей попадают в `manual_review`
+  и НЕ обновляются. Есть `--dry-run` и `--json`.
+- **UI:** «Месяц отключения» добавлен в ClientCardView (DatePicker month,
+  виден когда status='churned'), DebtorsView (колонка), BillingView
+  (колонка), Reports/composition и Reports/debtors/discipline
+  (поле в каталоге колонок). Backend `/billing/debtors` отдаёт
+  `churn_month`.
+- **Тесты:** `tests/test_churn_month.py` (4 кейса ChargeService),
+  `tests/test_api_organizations_churn.py` (5 кейсов PATCH).
+  Полный набор: 219 passed, 9 skipped.
+
+**Деплой:**
+1. `alembic upgrade head` на проде.
+2. `python -m scripts.backfill_churn_months --dry-run` → ревью списка.
+3. `python -m scripts.backfill_churn_months` → применение.
+4. Manual review для клиентов без платежей.
+
 ### 2026-05-20 — Drill-down KPI-плиток Dashboard в раздел «Отчёты»
 
 **Контекст:** руководителю нужно видеть «откуда взялось число» на каждой

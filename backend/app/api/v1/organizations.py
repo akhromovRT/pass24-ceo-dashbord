@@ -3,7 +3,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 from pydantic import Field as PydField
 from sqlmodel import Session, col, func, select
 
@@ -141,6 +141,7 @@ class OrganizationUpdate(BaseModel):
     name_display: str | None = None
     org_type: OrgType | None = None
     status: OrgStatus | None = None
+    churn_month: date | None = None
     manager_id: uuid.UUID | None = None
     client_since: date | None = None
     objects: int | None = None
@@ -158,6 +159,27 @@ class OrganizationUpdate(BaseModel):
     excluded_from_analytics: bool | None = None
     excluded_reason: str | None = None
 
+    @field_validator("churn_month")
+    @classmethod
+    def _normalize_churn_month(cls, v: date | None) -> date | None:
+        """Гранулярность — месяц. День приводится к 1-му."""
+        if v is None:
+            return None
+        return date(v.year, v.month, 1)
+
+
+def _last_payment_month(session: Session, org_id: uuid.UUID) -> date | None:
+    """Месяц (1-е число) последнего платежа клиента, либо None."""
+    q = select(func.max(Document.doc_date)).where(
+        Document.organization_id == org_id,
+        Document.doc_type == DocType.PAYMENT,
+        Document.doc_date.is_not(None),  # type: ignore[union-attr]
+    )
+    last_dt = session.exec(q).one()
+    if last_dt is None:
+        return None
+    return date(last_dt.year, last_dt.month, 1)
+
 
 @router.patch("/{inn}")
 def update_organization(
@@ -165,16 +187,55 @@ def update_organization(
     payload: OrganizationUpdate,
     session: Session = Depends(get_session),
 ):
-    org = session.exec(
-        select(Organization).where(Organization.inn == inn)
-    ).first()
+    q = select(Organization).where(Organization.inn == inn)
+    org = session.exec(q).first()
     if not org:
         raise HTTPException(status_code=404, detail="Organization not found")
+
+    prev_status = org.status
+    prev_churn_month = org.churn_month
     changes = payload.model_dump(exclude_unset=True)
+
+    # Логика churn_month вокруг смены статуса
+    new_status = changes.get("status", prev_status)
+    churn_in_payload = "churn_month" in changes
+
+    if new_status == OrgStatus.CHURNED:
+        if not churn_in_payload and prev_churn_month is None:
+            auto = _last_payment_month(session, org.id)
+            if auto is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "У клиента нет ни одного платежа — установите месяц "
+                        "отключения вручную (поле churn_month)."
+                    ),
+                )
+            changes["churn_month"] = auto
+    else:
+        if not churn_in_payload:
+            changes["churn_month"] = None
+
     for key, value in changes.items():
         setattr(org, key, value)
     org.updated_at = datetime.now(UTC)
     session.add(org)
+    session.flush()
+
+    # Пересборка леджера только для этого клиента
+    status_changed = prev_status != org.status
+    churn_changed = prev_churn_month != org.churn_month
+    if status_changed or churn_changed:
+        from app.services.allocation_service import AllocationService
+        from app.services.charge_service import ChargeService
+        charge_svc = ChargeService(session)
+        start = charge_svc.charge_start(org.id)
+        if start is not None:
+            charge_svc.rebuild_for_organization(
+                org.id, start=start, through=date.today(),
+            )
+            AllocationService(session).recompute_for_organization(org.id)
+
     session.commit()
     session.refresh(org)
     return org

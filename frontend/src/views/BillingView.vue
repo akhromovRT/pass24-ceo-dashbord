@@ -225,6 +225,16 @@ function ensureProtocol(url: string | null | undefined): string {
   return 'https://' + trimmed
 }
 
+const RU_MONTHS_SHORT = [
+  'янв', 'фев', 'мар', 'апр', 'май', 'июн',
+  'июл', 'авг', 'сен', 'окт', 'ноя', 'дек',
+]
+function fmtChurnMonth(val: string | null): string {
+  if (!val) return '—'
+  const d = new Date(val)
+  return `${RU_MONTHS_SHORT[d.getMonth()]} ${d.getFullYear()}`
+}
+
 function debtSeverity(value: number | null): 'danger' | 'warn' | 'secondary' | undefined {
   if (!value || value <= 0) return 'secondary'
   if (value > 100000) return 'danger'
@@ -368,6 +378,15 @@ function onMatrixClick(event: any) {
       <Column field="status" header="Статус" style="width: 110px">
         <template #body="{ data }">
           <Tag :severity="data.status === 'active' ? 'success' : 'secondary'">{{ data.status }}</Tag>
+        </template>
+      </Column>
+      <Column header="Отключён" style="width: 110px">
+        <template #body="{ data }">
+          <span v-if="data.status === 'churned'" class="churn-cell"
+            title="Месяц последнего начисления АП">
+            {{ fmtChurnMonth(data.churn_month) }}
+          </span>
+          <span v-else class="muted">—</span>
         </template>
       </Column>
       <Column field="objects" header="Объекты" style="width: 90px" />
@@ -663,4 +682,6 @@ function onMatrixClick(event: any) {
 .cloud-link:hover {
   text-decoration: underline;
 }
+.churn-cell { color: #b45309; font-size: 0.85rem; }
+.muted { color: #cbd5e1; }
 </style>

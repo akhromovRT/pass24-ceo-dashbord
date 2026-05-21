@@ -76,6 +76,16 @@ function fmtRub(value: number | null) {
   }).format(value)
 }
 
+const RU_MONTHS = [
+  'янв', 'фев', 'мар', 'апр', 'май', 'июн',
+  'июл', 'авг', 'сен', 'окт', 'ноя', 'дек',
+]
+function fmtChurnMonth(val: string | null): string {
+  if (!val) return '—'
+  const d = new Date(val)
+  return `${RU_MONTHS[d.getMonth()]} ${d.getFullYear()}`
+}
+
 const BUCKET_SEVERITY: Record<string, string> = {
   '0-30': 'secondary', '31-60': 'warn', '61-90': 'danger', '90+': 'danger',
 }
@@ -155,6 +165,15 @@ function openClient(inn: string) {
           />
         </template>
       </Column>
+      <Column header="Месяц отключения" style="width: 130px">
+        <template #body="{ data }">
+          <span v-if="data.status === 'churned'" class="churn-cell"
+            title="Последний месяц начисления АП">
+            {{ fmtChurnMonth(data.churn_month) }}
+          </span>
+          <span v-else class="muted">—</span>
+        </template>
+      </Column>
       <Column field="payment_score" header="Оценка" style="width: 90px">
         <template #body="{ data }">{{ data.payment_score ?? '—' }}</template>
       </Column>
@@ -177,4 +196,6 @@ function openClient(inn: string) {
 .debtors-table {
   cursor: pointer;
 }
+.churn-cell { color: #b45309; font-size: 0.85rem; }
+.muted { color: #cbd5e1; }
 </style>

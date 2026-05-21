@@ -37,6 +37,9 @@ class Organization(SQLModel, table=True):
     manager_id: uuid.UUID | None = Field(default=None, foreign_key="users.id")
     client_since: date | None = None
     status: OrgStatus = Field(default=OrgStatus.ACTIVE)
+    # Месяц последнего начисления АП для клиента в статусе CHURNED.
+    # Хранится как первое число месяца. None для всех остальных статусов.
+    churn_month: date | None = None
     objects: int | None = None
     object_type: str | None = None
     cloud_url: str | None = None

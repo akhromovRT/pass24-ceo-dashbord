@@ -69,6 +69,7 @@ DEBTORS_COLUMNS: list[tuple[str, str]] = [
     ("priority", "Приоритет взыскания"),
     ("city", "Город"),
     ("status", "Статус"),
+    ("churn_month", "Месяц отключения"),
 ]
 
 DISCIPLINE_COLUMNS: list[tuple[str, str]] = [
@@ -84,6 +85,7 @@ DISCIPLINE_COLUMNS: list[tuple[str, str]] = [
     ("payment_score", "Payment score"),
     ("total_debt", "Долг"),
     ("status", "Статус"),
+    ("churn_month", "Месяц отключения"),
 ]
 
 REPORTS: dict[str, dict] = {
@@ -91,6 +93,18 @@ REPORTS: dict[str, dict] = {
     "discipline": {"title": "Дисциплина платежей", "columns": DISCIPLINE_COLUMNS},
     "composition": {"title": "Состав показателя", "columns": []},
 }
+
+_RU_MONTHS = [
+    "январь", "февраль", "март", "апрель", "май", "июнь",
+    "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь",
+]
+
+
+def _fmt_churn_month(d) -> str:
+    if d is None:
+        return ""
+    return f"{_RU_MONTHS[d.month - 1]} {d.year}"
+
 
 STATUS_LABELS = {
     OrgStatus.ACTIVE: "Активен",
@@ -275,6 +289,7 @@ def build_debtors_report(session: Session, c: ReportCriteria) -> list[dict]:
             "priority": round(priority, 2),
             "city": o.city_region or "—",
             "status": STATUS_LABELS.get(o.status, str(o.status)),
+            "churn_month": _fmt_churn_month(o.churn_month),
         })
     return _sort_rows(rows, c.sort_by, c.sort_dir, "priority")
 
@@ -398,6 +413,7 @@ def build_discipline_report(session: Session, c: ReportCriteria) -> list[dict]:
             "payment_score": o.payment_score,
             "total_debt": round(_f(o.total_debt), 2),
             "status": STATUS_LABELS.get(o.status, str(o.status)),
+            "churn_month": _fmt_churn_month(o.churn_month),
         })
     # худшие (низкая собираемость) — сверху
     return _sort_rows(rows, c.sort_by, c.sort_dir, "collectability")
