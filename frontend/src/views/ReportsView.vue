@@ -420,8 +420,12 @@ function applyQueryComposition() {
 onMounted(() => {
   loadManagers()
   loadTemplates()
-  applyQueryComposition()
-  runPreview()
+  // applyQueryComposition() переключает preset → triggers watch(preset) → runPreview()
+  // вручную вызываем только если query-параметров не было
+  const fromQuery = applyQueryComposition()
+  if (!fromQuery) {
+    runPreview()
+  }
 })
 </script>
 

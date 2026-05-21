@@ -132,15 +132,21 @@ def _build_mrr_fact(session: Session, c) -> list[dict]:
     if period is None:
         return []
     y, m = period
-    contrib_rows = session.exec(
+    contrib_query = (
         select(MonthlyCharge.organization_id,
                func.coalesce(func.sum(PaymentAllocation.allocated_amount), 0))
         .select_from(PaymentAllocation)
         .join(MonthlyCharge, MonthlyCharge.id == PaymentAllocation.monthly_charge_id)
-        .join(Organization, Organization.id == MonthlyCharge.organization_id)
-        .where(excl(), MonthlyCharge.year == y, MonthlyCharge.month == m)
+        .where(MonthlyCharge.year == y, MonthlyCharge.month == m)
         .group_by(MonthlyCharge.organization_id)
-    ).all()
+    )
+    if not c.include_excluded:
+        contrib_query = (
+            contrib_query
+            .join(Organization, Organization.id == MonthlyCharge.organization_id)
+            .where(excl())
+        )
+    contrib_rows = session.exec(contrib_query).all()
     contrib = {oid: to_float(s) for oid, s in contrib_rows if to_float(s) > 0}
     if not contrib:
         return []

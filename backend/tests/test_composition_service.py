@@ -99,6 +99,23 @@ def test_mrr_fact_empty_for_invalid_period(db_session: Session):
     assert build_composition_report(db_session, criteria) == []
 
 
+def test_mrr_fact_includes_excluded_when_flag_set(db_session: Session):
+    a = _org(db_session, "150", name="A-normal", status=OrgStatus.ACTIVE,
+             monthly_ap=Decimal("10000"))
+    b = _org(db_session, "151", name="B-excluded", status=OrgStatus.ACTIVE,
+             monthly_ap=Decimal("5000"), excluded_from_analytics=True)
+    ch_a = _charge(db_session, a, 2026, 4, 10000)
+    ch_b = _charge(db_session, b, 2026, 4, 5000)
+    _pay(db_session, a, ch_a, 10000, date(2026, 4, 5))
+    _pay(db_session, b, ch_b, 5000, date(2026, 4, 7))
+
+    criteria = ReportCriteria(metric="mrr_fact", period="2026-04",
+                              include_excluded=True)
+    rows = build_composition_report(db_session, criteria)
+    assert {r["name"] for r in rows} == {"A-normal", "B-excluded"}
+    assert control_value_for("mrr_fact", rows) == 15000.0
+
+
 # --- mrr_plan -------------------------------------------------------------
 
 
