@@ -13,6 +13,7 @@ from app.models import (
     MonthlyCharge,
     Organization,
     OrgStatus,
+    PaymentAllocation,
     TariffPeriod,
 )
 
@@ -91,6 +92,25 @@ class ChargeService:
             candidates.append(date(first_pay.year, first_pay.month, 1))
         return min(candidates) if candidates else None
 
+    def _clear_charges_and_allocs(self, org_id) -> None:
+        """Удаляет все monthly_charges клиента вместе с зависимыми
+        payment_allocations. Без предварительной чистки allocs DELETE на
+        charges падает по FK payment_allocations.monthly_charge_id."""
+        charges = list(self._charges(org_id))
+        if not charges:
+            return
+        charge_ids = [c.id for c in charges]
+        for a in self.session.exec(
+            select(PaymentAllocation).where(
+                PaymentAllocation.monthly_charge_id.in_(charge_ids)  # type: ignore[union-attr]
+            )
+        ).all():
+            self.session.delete(a)
+        self.session.flush()
+        for c in charges:
+            self.session.delete(c)
+        self.session.flush()
+
     def rebuild_for_organization(self, org_id, start: date, through: date) -> None:
         """Пересобирает monthly_charge клиента за [start, through].
         Удаляет старые начисления клиента и строит заново. Приоритет —
@@ -107,15 +127,11 @@ class ChargeService:
                 and org.churn_month is not None):
             if org.churn_month < start:
                 # Месяц отключения раньше точки начала ленты — лента пуста.
-                for c in self._charges(org_id):
-                    self.session.delete(c)
-                self.session.flush()
+                self._clear_charges_and_allocs(org_id)
                 return
             if org.churn_month < through:
                 through = org.churn_month
-        for c in self._charges(org_id):
-            self.session.delete(c)
-        self.session.flush()
+        self._clear_charges_and_allocs(org_id)
         realizations = self._realizations(org_id)
         for year, month in _iter_months(start, through):
             real = realizations.get((year, month))
