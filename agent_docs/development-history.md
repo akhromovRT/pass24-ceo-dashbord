@@ -9,6 +9,45 @@
 
 ## Записи
 
+### 2026-05-21 — Дедупликация платежей + реассайн транзитов + cascade-fix
+
+**Контекст:** в комментариях Софьи к задаче №886 систематически встречалось «у вас оплаты прошли дважды». На 6 проверенных клиентах коэффициент удвоения оказался ровно 2.00× — баг импорта: один платёж попадал в БД и из реестра 1С «Оплата от покупателей» (payments.xls), и из банковской выписки. Дополнительно по 5 транзитным плательщикам (юр.лица, платившие за других клиентов: ПРОМСТРОЙХОЛДИНГ за Гаджикурбанова, Мораш Олеся за ГАРД-КОМФОРТ и др.) деньги висели не на конечных клиентах.
+
+**Что сделано:**
+- **Дедупликация** (SQL-операция на production): по всей БД 656 cross-source clean_pair групп (на бэк-копиях 0 аллокаций — AR-леджер строился только из payments.xls). Удалено **635 банк-документов на ₽18.3 млн** фантомных денег. Intra-source дубли (317 групп) не трогаем — это разные реальные платежи на одну сумму в один день. Бэкап `/root/backups/ceo24-pre-dedup-2026-05-21-1026.dump`. ADR-018.
+- **Реассайн транзитов** (`backend/scripts/reassign_transit_payments.py`): 35 PAYMENT-документов на ₽583 877 переехали с 5 TRANSIT-плательщиков на конечных клиентов. Для каждого переноса: подмена `Document.organization_id` + `Document.contract_id` (с автосозданием контракта того же типа у target), удаление старых аллокаций, пересборка leдера через `ChargeService` + `AllocationService`.
+- **Cascade-fix** (`charge_service.py`): новый helper `_clear_charges_and_allocs` — удаляет PaymentAllocation перед DELETE monthly_charges, иначе FK-violation. Поймали во время реассайна. Регресс-тест `test_charge_service_cascade.py`.
+
+**Эффект на дашборд:** MRR факт апрель 3 578 665 → 3 611 392 ₽ (+32K, перенесённые деньги попали правильным клиентам); Сбор май +12K; Новые за год 21 → 16 (5 фальшивых-новых были транзитниками); Churn rate 12.7% → 12.2%.
+
+**Тесты:** backend 219 → **222 passed** (+3 новых на TRANSIT/cascade). Frontend без изменений.
+
+**Документация:** `agent_docs/guides/registry-reconciliation-mpp.md` — инструкция для МПП по ежемесячной сверке Excel-реестра с CEO24 (6 категорий расхождений, действия через карточку клиента, чек-лист). Поставлена задача Bitrix24 **№930** на Софью Морозову (наблюдатель — Ирина Зыкова), срок 2026-05-22 18:00.
+
+**Не сделано / отложено:**
+- intra-source дубли в payments.xls (особенно ПРОМСТРОЙХОЛДИНГ ₽468K vs ожидаемых ₽234K — 2× в одном реестре). Возможно бухгалтер импортировал payments.xls дважды.
+- Жду от Софьи ИНН по транзитам/дублям, найденным в её новой сверке.
+
+**Следующий шаг:** обработать ответы Софьи по задаче №930.
+
+### 2026-05-21 — TRANSIT — новый статус для бывших плательщиков
+
+**Контекст:** при сверке реестра Софьи обнаружены два смежных кейса, которые в существующих статусах (ACTIVE/CHURNED/SUSPENDED/PROSPECT) описать нельзя: (1) старая карточка компании после переоформления на новый ИНН (Бристоль Сервис, Гонцова/Новая Опалиха) — клиент тот же, но в системе две active-записи, обе с одинаковой АП; (2) юр.лица, переводящие деньги за другого клиента (ПРОМСТРОЙХОЛДИНГ платит за Гаджикурбанова, Мораш — за ГАРД-КОМФОРТ, Сбербанк/Реутова — за Белое озеро). В обоих случаях это **не отток** — клиент-получатель услуги не уходит, меняется только плательщик/ИНН.
+
+**Что сделано:**
+- **Модель:** `OrgStatus.TRANSIT = "transit"`. Миграция `c4f1a2e8b3d6` (ALTER TYPE ADD VALUE). Сразу поймали баг: SQLAlchemy сериализует enum по `.name` (UPPERCASE), а добавил `transit` lowercase — фикс-миграция `d8e2b91f5a7c` (RENAME VALUE → 'TRANSIT'). PATCH `/organizations` авто-проставляет `churn_month` при переходе в TRANSIT — той же логикой что для CHURNED.
+- **Семантика:** в `ChargeService.rebuild_for_organization` к стопу начислений добавлен TRANSIT (`status in (CHURNED, TRANSIT)` + churn_month). В `dashboard.py` TRANSIT исключён из `stopped_since_year_start` и из знаменателя churn rate — клиент не «ушёл», он сменил ИНН/плательщика. Composition `_STATUS_LABELS["TRANSIT"] = "Транзит"`.
+- **Frontend:** «Транзит» добавлен в `statusOptions` ReportsView, DebtorsView, ClientCardView.
+- **Данные:** применено 9 PATCH'ей — Бристоль (7703746155) и Гонцова (773179504256) → TRANSIT (старые ИНН после переоформления); ПРОМСТРОЙХОЛДИНГ, Мораш, Сбербанк, Автокомбинат, Котельников → TRANSIT (транзитные плательщики); ТПС-РУС (6732210800) и АйТи Десижн (7720735065) → ACTIVE с АП (200K и 15K соответственно). Бэкап `/root/backups/ceo24-pre-transit-2026-05-21-0935.dump`.
+
+**Эффект на дашборд:** MRR план 4 754 381 → **4 945 963 ₽** (+191K от ТПС-РУС/АйТи Десижн минус Бристоль/Гонцова). Активные 281 → 281 (баланс +2/−2). Отток с года 30 → 27 (3 транзитных вышли из расчёта). Churn rate 14.1% → 12.7%.
+
+**Тесты:** +2 (`test_active_to_transit_autosets_churn_month`, `test_transit_to_active_clears_churn_month`). Всего 221 passed.
+
+**ADR:** ADR-017.
+
+**Следующий шаг:** дедупликация платежей и реассайн транзитных платежей (закрыто следующей записью).
+
 ### 2026-05-21 — churn_month: месяц отключения для CHURNED-клиентов
 
 **Контекст:** клиент в статусе «Отток» — это тот, кому мы перестали выставлять
@@ -97,105 +136,6 @@ KPI-плитке Dashboard — какие клиенты и суммы форм�
 - Деплой на production — после браузерной проверки.
 
 **Следующий шаг:** браузерный smoke-тест drill-down, деплой.
-
-### 2026-05-13 — Инцидент: восстановление + security hotfix + reliability + persistent БД (P0/P1/P2)
-
-**Что сделано:**
-- **Инцидент:** обнаружено, что http://85.239.51.34 не открывается (порт 80 closed). Диагностика: контейнеры в статусе `Exited (255)` 4 недели назад, не удалены. Причина — отсутствие `restart: unless-stopped` в compose и (вероятно) перезапуск Docker daemon на стороне Timeweb.
-- **P0 Recovery:**
-  - SSH-ключ: `~/.ssh/ceo24_ed25519`, alias `ceo24` в `~/.ssh/config`. Запись добавлена.
-  - Дамп БД до любых изменений: `~/Backups/ceo24/ceo24-pre-recovery-2026-05-13-1656.dump` (385 KB)
-  - Стек поднят через `docker compose up -d`. Данные на месте: 273 orgs, 557 contracts, 3814 docs, 3428 snapshots, MRR 4 483 322 ₽ (совпало с эталоном).
-- **P0.6 Security hotfix:** все 6 data-роутеров (dashboard, billing, organizations, contracts, alerts, imports) использовали `Depends(get_session)` без `get_current_user` — финансовые данные ОНВИ СЕРВИС публично утекали через `/api/v1/dashboard/summary` и т.д. Добавлен router-level `dependencies=[Depends(get_current_user)]`. Тесты обновлены (override в conftest-стиле). 70 passed, 9 skipped (file-based parsers без артефактов). ADR-011 зафиксирован.
-- **P1 Reliability:**
-  - `restart: unless-stopped` для всех 3 сервисов
-  - healthchecks: backend `/health`, frontend `wget /`, db `pg_isready`
-  - лог-ротация `json-file 10MB × 3`
-  - swap 2 GB (swappiness=10) — система была без swap при 2 GB RAM
-  - auto-recovery test: `docker kill backend` → через ~12 сек снова Up
-- **P2 Persistent storage:**
-  - Bind mount `/srv/ceo24/pgdata:/var/lib/postgresql/data` (uid 70, chmod 700)
-  - Дамп → восстановление в новый bind mount → 273 orgs (совпало)
-  - Persistence test: `docker compose rm -fs db && up -d db` → 273 orgs остались. ADR-007 помечен superseded by ADR-010.
-- **P2.3 Автобэкап:** `/usr/local/bin/ceo24-backup.sh` (pg_dump -Fc | gzip, retention 14 дней), cron `/etc/cron.d/ceo24-backup` 03:00 UTC. Первый бэкап: 377 KB gz.
-- **P2.4 Pull на ноут:** launchd-агент `com.akhromov.ceo24-backup-pull` 05:00 локального → `~/Backups/ceo24/`. Первый pull выполнен.
-- **Runbook:** `agent_docs/guides/runbook.md` — операционные процедуры (диагностика, восстановление из дампа, деплой, сброс пароля).
-- **Документация:** исправлен `agent_docs/index.md` (admin login — это email `admin@onvi-service.ru`, не `admin`). Локальные креды в `~/.config/ceo24/credentials` (chmod 600).
-
-**ADR:** ADR-010 (persistent pg через bind mount), ADR-011 (router-level auth dependency), ADR-007 superseded.
-
-**Метрики (после восстановления):** MRR 4 483 322 ₽, ARR 53 799 866 ₽, 273 активных клиента, 6 172 462 ₽ долг (совпало с эталоном 2026-03-07 — никаких потерь).
-
-**Не сделано / отложено:**
-- Сброс admin-пароля (генерация выполнена локально, новый хеш в `~/.config/ceo24/credentials`, но UPDATE в production users заблокирован auto-policy — требует явного одобрения)
-- UptimeRobot (P1.3) — интерактивная настройка через web-UI, оставлено пользователю
-- DR-drill в изолированную БД (P2.5) — частично закрыто фактом успешного restore при миграции на bind mount
-- P3 (фичи) — план зафиксирован, начнётся после стабилизации
-
-**Следующий шаг:** Сброс admin-пароля (или установка пользовательского). После этого — UptimeRobot, затем переход к P3.1 (сверка платежей с банк-выпиской через UI).
-
-### 2026-03-07 — Деплой + Contracts Registry + Fixes
-
-**Что сделано:**
-- **Деплой на Timeweb VPS** (85.239.51.34): Docker Compose (PostgreSQL + FastAPI + Vue/Nginx), настройка firewall (порты 22, 80, 443), Alembic миграции, seed admin user
-- **Docker fixes:** убраны volumes из docker-compose.yml (managed platform restriction), nginx.conf скопирован в frontend build context вместо bind mount, backend Dockerfile дополнен COPY для alembic/, alembic.ini, scripts/
-- **XLS support:** создан `backend/app/parser/utils.py` — `load_workbook_any()` конвертирует .xls (xlrd) → openpyxl Workbook. Обновлены debt_report.py и bank_statement.py
-- **Импорт данных:** загружен отчёт «Задолженность покупателей» (268 orgs, 376 contracts, 3814 docs) + аналитика поступлений через seed_data.py (176 orgs обновлено, 182 contracts, 3428 snapshots)
-- **Contracts API:** новый endpoint `GET /api/v1/contracts` — join Contract+Organization, search, sort (org_name/monthly_amount/contract_date), pagination
-- **BillingView v2:** режим-переключатель SelectButton ("По клиентам" / "По договорам"), таблица договоров с 11 колонками (Контрагент, ИНН, Договор, Дата, АП/мес, Тип объекта, Статус, Облако, № сист., Оборудование, Адрес)
-- **Sidebar:** label "Биллинг" → "Реестр клиентов"
-- **Очистка БД:** удалены 3 пустых import_runs (0 buyers/contracts/docs)
-
-**Dashboard метрики:** MRR 4,483,322₽, ARR 53,799,866₽, 273 активных клиента, 6,172,462₽ общий долг
-
-**Файловая структура (новое):**
-```
-backend/app/parser/utils.py        # load_workbook_any() — .xls/.xlsx support
-backend/app/api/v1/contracts.py    # GET /contracts — join + search + sort + pagination
-frontend/nginx.conf                # Скопирован в build context (не bind mount)
-```
-
-**API endpoints (добавлено):**
-```
-GET /api/v1/contracts(?search,sort_by,sort_dir,page,page_size)
-```
-
-**Ключевые решения:** ADR-007 (без volumes в Docker), ADR-008 (xlrd конвертация), ADR-009 (режим-переключатель в реестре)
-
-**Следующий шаг:** Импорт банковской выписки через UI, расширение парсера аналитики
-
-### 2026-05-16 — Редизайн рабочих экранов (Dashboard, Реестр, Должники, карточка)
-
-**Контекст:** графики дашборда показывали 7 пустых месяцев (платежи импортированы только с 01/2026), KPI «-23% м/м» вводил в заблуждение (откат от мартовской аномалии 127%), «287 алертов» — голый счётчик. Реестр — плоская таблица без аналитики, карточка клиента — только просмотр.
-
-**Спецификация/планы:** `docs/superpowers/specs/2026-05-15-ceo24-screens-redesign-design.md`, `docs/superpowers/plans/2026-05-15-ceo24-screens-redesign.md`.
-
-**Backend (8 эндпоинтов, без миграций — все поля уже были в моделях):**
-- `PATCH /organizations/{inn}` — редактирование (схема `OrganizationUpdate`, read-only inn/name_1c/total_debt/payment_score/*_raw)
-- `GET /organizations/{inn}/documents` — история документов
-- `GET /users/options` — список менеджеров для не-админов (router-level admin-guard перенесён на конкретные эндпоинты)
-- `GET /dashboard/collection-trend` — тренд сбора только по месяцам с данными
-- `GET /dashboard/attention` — агрегация открытых алертов по типу
-- `dashboard/summary` расширен: current_month_collected, days_passed/in_month, debt_90plus_amount/share, collection_rate_fact
-- `GET /billing/segments` — сегментация (платят/частично/не платят/должники)
-- `GET /billing/debtors` обогащён months_overdue + aging_bucket
-
-**Frontend:**
-- Новые компоненты: `KpiTile`, `SegmentBand`, `AttentionPanel`
-- `DashboardView` переписан: 5 KPI вокруг сбора денег, честный график сбора, aging с кликом на /debtors, панель «Требуют внимания»; шахматка убрана
-- `DebtorsView` переписан: реестр должников с aging-фильтром и инлайн-сменой статуса
-- `BillingView`: шапка сегментов + режим «Шахматка» (heatmap перенесён с дашборда)
-- `ClientCardView` переписан: редактируемый инструмент (все поля правятся, статус меняется), вкладки История платежей / Помесячно / Договоры / Объекты
-- Подключён `ToastService` для уведомлений
-
-**Тесты:** backend 121 passed, 9 skipped (было 106 — добавлено 15: test_api_dashboard.py, test_api_billing.py, PATCH/documents/options). Frontend: vue-tsc чисто, build успешен.
-
-**Не сделано / отложено:**
-- Деплой на production — требует подтверждения пользователя (shared-система, 5 пользователей)
-- Аномалия марта 2026 (собираемость 127%) — внесена в backlog как задача проверки данных
-- Сегменты paying/partial/not_paying на Реестре — пока только числа в шапке (нет серверного фильтра по собираемости в списке организаций)
-
-**Следующий шаг:** деплой и ручная проверка на production; затем P3.1 (сверка платежей с банком — план готов).
 
 ### 2026-05-18 — Учёт абонентской платы (AR-леджер)
 
