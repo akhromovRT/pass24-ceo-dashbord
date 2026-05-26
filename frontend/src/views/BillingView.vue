@@ -9,6 +9,7 @@ import ProgressBar from 'primevue/progressbar'
 import SelectButton from 'primevue/selectbutton'
 import Select from 'primevue/select'
 import MultiSelect from 'primevue/multiselect'
+import DatePicker from 'primevue/datepicker'
 import { useToast } from 'primevue/usetoast'
 import { FilterMatchMode } from '@primevue/core/api'
 import VChart from 'vue-echarts'
@@ -52,7 +53,7 @@ async function changeClientStatus(item: any, newStatus: string) {
   try {
     const updated = await store.updateOrganization(item.inn, { status: newStatus })
     if (updated) Object.assign(item, updated)
-    const msg = newStatus === 'churned' && updated?.churn_month
+    const msg = (newStatus === 'churned' || newStatus === 'transit') && updated?.churn_month
       ? `Месяц отключения: ${fmtChurnMonth(updated.churn_month)}`
       : undefined
     toast.add({
@@ -64,9 +65,47 @@ async function changeClientStatus(item: any, newStatus: string) {
     const detail = e?.response?.data?.detail || 'Изменения не сохранены'
     toast.add({
       severity: 'error', summary: 'Не удалось сменить статус',
+      detail, life: 6000,
+    })
+  }
+}
+
+function toMonthIsoString(d: Date | null): string | null {
+  if (!d) return null
+  // Бэкенд нормализует до 1-го числа месяца, но отправляем уже нормализованную
+  // дату в UTC-формате, чтобы избежать timezone-сдвига на бэке.
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`
+}
+
+async function changeChurnMonth(item: any, newDate: Date | null) {
+  const prevIso = item.churn_month
+  const newIso = toMonthIsoString(newDate)
+  if (newIso === prevIso) return
+  item.churn_month = newIso
+  try {
+    const updated = await store.updateOrganization(item.inn, { churn_month: newIso })
+    if (updated) Object.assign(item, updated)
+    toast.add({
+      severity: 'success', summary: 'Месяц отключения обновлён',
+      detail: newIso ? fmtChurnMonth(newIso) : 'очищен',
+      life: 2500,
+    })
+  } catch (e: any) {
+    item.churn_month = prevIso
+    const detail = e?.response?.data?.detail || 'Изменения не сохранены'
+    toast.add({
+      severity: 'error', summary: 'Не удалось обновить месяц',
       detail, life: 5000,
     })
   }
+}
+
+function parseChurnMonth(val: string | null): Date | null {
+  if (!val) return null
+  // Сервер отдаёт ISO date (YYYY-MM-DD), парсим без timezone-сдвига.
+  const [y, m] = val.split('-').map(Number)
+  if (!y || !m) return null
+  return new Date(y, m - 1, 1)
 }
 
 const mode = ref<'clients' | 'contracts' | 'registry' | 'matrix'>('clients')
@@ -86,7 +125,11 @@ const contracts = ref<any[]>([])
 const contractsTotal = ref(0)
 const contractsLoading = ref(false)
 const contractSortBy = ref('org_name')
-const contractSortDir = ref('asc')
+const contractSortDir = ref<'asc' | 'desc'>('asc')
+
+// Clients mode sort state — поля и направление, которые шлются в /organizations.
+const clientSortBy = ref<string | null>(null)
+const clientSortDir = ref<'asc' | 'desc'>('asc')
 
 // Registry mode state
 const registryItems = ref<any[]>([])
@@ -122,7 +165,13 @@ const docExchangeOptions = computed(() =>
 )
 
 function loadClients() {
-  store.fetch({ search: search.value || undefined, page: page.value, page_size: pageSize })
+  store.fetch({
+    search: search.value || undefined,
+    sort_by: clientSortBy.value || undefined,
+    sort_dir: clientSortDir.value,
+    page: page.value,
+    page_size: pageSize,
+  })
 }
 
 async function loadContracts() {
@@ -198,6 +247,8 @@ watch(mode, () => {
   page.value = 1
   search.value = ''
   registryFilters.value.global.value = null
+  clientSortBy.value = null
+  clientSortDir.value = 'asc'
   loadData()
 })
 
@@ -234,15 +285,23 @@ function onPage(event: any) {
 }
 
 function onSort(event: any) {
-  const fieldMap: Record<string, string> = {
-    org_name: 'org_name',
-    monthly_amount: 'monthly_amount',
-    contract_date: 'contract_date',
+  const dir: 'asc' | 'desc' = event.sortOrder === -1 ? 'desc' : 'asc'
+  if (mode.value === 'contracts') {
+    const fieldMap: Record<string, string> = {
+      org_name: 'org_name',
+      monthly_amount: 'monthly_amount',
+      contract_date: 'contract_date',
+    }
+    contractSortBy.value = fieldMap[event.sortField] || 'org_name'
+    contractSortDir.value = dir
+    page.value = 1
+    loadContracts()
+  } else if (mode.value === 'clients') {
+    clientSortBy.value = event.sortField || null
+    clientSortDir.value = dir
+    page.value = 1
+    loadClients()
   }
-  contractSortBy.value = fieldMap[event.sortField] || 'org_name'
-  contractSortDir.value = event.sortOrder === 1 ? 'asc' : 'desc'
-  page.value = 1
-  loadContracts()
 }
 
 function onRowClick(event: any) {
@@ -393,11 +452,15 @@ function onMatrixClick(event: any) {
       :totalRecords="store.total"
       :rows="pageSize"
       :first="(page - 1) * pageSize"
+      :sortField="clientSortBy || undefined"
+      :sortOrder="clientSortDir === 'desc' ? -1 : 1"
       paginator
       stripedRows
       @page="onPage"
+      @sort="onSort"
       @row-click="onRowClick"
       rowHover
+      removableSort
       class="client-table"
     >
       <Column field="name_display" header="Клиент" sortable>
@@ -412,13 +475,13 @@ function onMatrixClick(event: any) {
           <Tag :severity="debtSeverity(data.total_debt)">{{ formatCurrency(data.total_debt) }}</Tag>
         </template>
       </Column>
-      <Column field="payment_score" header="Оценка" style="width: 120px">
+      <Column field="payment_score" header="Оценка" sortable style="width: 120px">
         <template #body="{ data }">
           <ProgressBar v-if="data.payment_score != null" :value="data.payment_score" :showValue="true" style="height: 20px" />
           <span v-else>—</span>
         </template>
       </Column>
-      <Column field="status" header="Статус" style="width: 170px">
+      <Column field="status" header="Статус" sortable style="width: 170px">
         <template #body="{ data }">
           <div class="status-cell" @click.stop>
             <Tag
@@ -439,12 +502,24 @@ function onMatrixClick(event: any) {
           </div>
         </template>
       </Column>
-      <Column header="Отключён" style="width: 110px">
+      <Column field="churn_month" header="Отключён" sortable style="width: 150px">
         <template #body="{ data }">
-          <span v-if="data.status === 'churned'" class="churn-cell"
-            title="Месяц последнего начисления АП">
-            {{ fmtChurnMonth(data.churn_month) }}
-          </span>
+          <div
+            v-if="data.status === 'churned' || data.status === 'transit'"
+            class="churn-edit-cell" @click.stop
+          >
+            <DatePicker
+              :modelValue="parseChurnMonth(data.churn_month)"
+              @update:modelValue="(v) => changeChurnMonth(data, (v as Date | null) ?? null)"
+              view="month"
+              dateFormat="mm/yy"
+              :placeholder="'мес/год'"
+              showIcon
+              size="small"
+              class="churn-inline-picker"
+              :pt="{ pcInputText: { root: { 'aria-label': 'Месяц отключения' } } }"
+            />
+          </div>
           <span v-else class="muted">—</span>
         </template>
       </Column>
@@ -767,6 +842,23 @@ function onMatrixClick(event: any) {
   font-size: 0.85rem;
 }
 .status-cell :deep(.p-select-dropdown) {
+  width: 1.8rem;
+}
+
+.churn-edit-cell {
+  cursor: default;
+}
+.churn-edit-cell :deep(.p-datepicker) {
+  width: 100%;
+  min-width: 0;
+}
+.churn-edit-cell :deep(.p-datepicker-input) {
+  padding: 0.25rem 0.4rem;
+  font-size: 0.85rem;
+  width: 100%;
+  min-width: 0;
+}
+.churn-edit-cell :deep(.p-datepicker-dropdown) {
   width: 1.8rem;
 }
 </style>

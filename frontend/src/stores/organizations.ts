@@ -25,6 +25,8 @@ export const useOrganizationsStore = defineStore('organizations', () => {
     search?: string
     status?: string
     manager_id?: string
+    sort_by?: string
+    sort_dir?: 'asc' | 'desc'
     page?: number
     page_size?: number
   } = {}) {

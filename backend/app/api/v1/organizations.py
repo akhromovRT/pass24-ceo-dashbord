@@ -30,11 +30,27 @@ router = APIRouter(
 )
 
 
+_SORTABLE_COLUMNS = {
+    "name_display": Organization.name_display,
+    "name_1c": Organization.name_1c,
+    "inn": Organization.inn,
+    "monthly_ap": Organization.monthly_ap,
+    "total_debt": Organization.total_debt,
+    "payment_score": Organization.payment_score,
+    "status": Organization.status,
+    "churn_month": Organization.churn_month,
+    "objects": Organization.objects,
+    "city_region": Organization.city_region,
+}
+
+
 @router.get("")
 def list_organizations(
     search: str | None = None,
     status: OrgStatus | None = None,
     manager_id: uuid.UUID | None = None,
+    sort_by: str | None = None,
+    sort_dir: str = Query(default="asc", pattern="^(asc|desc)$"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1, le=100),
     session: Session = Depends(get_session),
@@ -57,6 +73,13 @@ def list_organizations(
     if manager_id:
         query = query.where(Organization.manager_id == manager_id)
         count_query = count_query.where(Organization.manager_id == manager_id)
+
+    if sort_by and sort_by in _SORTABLE_COLUMNS:
+        column = _SORTABLE_COLUMNS[sort_by]
+        order_clause = col(column).desc() if sort_dir == "desc" else col(column).asc()
+        query = query.order_by(order_clause.nulls_last())
+    else:
+        query = query.order_by(col(Organization.name_display).asc().nulls_last())
 
     total = session.exec(count_query).one()
     offset = (page - 1) * page_size
