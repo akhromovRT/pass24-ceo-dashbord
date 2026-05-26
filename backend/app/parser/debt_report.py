@@ -16,16 +16,33 @@ class HierarchyLevel(str, enum.Enum):
     CONTRACT = "contract"
     DOCUMENT = "document"
     TOTAL = "total"
+    GROUP_MARKER = "group_marker"  # технический маркер раскрытия группы 1С (<...>)
     UNKNOWN = "unknown"
 
 
 _INN_RE = re.compile(r"^\d{10}(\d{2})?$")
-_PERIOD_RE = re.compile(
+# Два формата периода в шапке файла:
+# 1. «за январь 2025 г. - февраль 2026 г.» — русские названия месяцев
+# 2. «за 01.01.2025 - 24.05.2026» — даты с точками (новый формат 1С)
+_PERIOD_RE_MONTHS = re.compile(
     r"за\s+(\w+)\s+(\d{4})\s*г?\.\s*-\s*(\w+)\s+(\d{4})\s*г?\.",
+    re.IGNORECASE,
+)
+_PERIOD_RE_DATES = re.compile(
+    r"за\s+(\d{2}\.\d{2}\.\d{4})\s*-\s*(\d{2}\.\d{2}\.\d{4})",
     re.IGNORECASE,
 )
 _DOC_NUM_DATE_RE = re.compile(r"№\s*(.+?)\s+от\s+(\d{2}\.\d{2}\.\d{4})")
 _CONTRACT_NUM_DATE_RE = re.compile(r"№\s*(.+?)\s+от\s+(\d{2}\.\d{2}\.\d{4})")
+# Договор без префикса «Договор»: начинается сразу с номера и заканчивается
+# «от DD.MM.YYYY» (плюс опциональный «г.» / комментарий в скобках).
+_BARE_CONTRACT_RE = re.compile(
+    # Договор без префикса «Договор»: строка вида «<номер>[ опц. слово] от DD.MM.YYYY».
+    # Допускаем кириллицу и пробел между словом и номером (например «Альфа 2021/05-1089/П»),
+    # а также пробел после «№» (например «№ 24/02 - 2025 от 25.02.2025»).
+    r"^[№#]?\s*[\w][\w\s\-./№#]*\s+от\s+\d{2}\.\d{2}\.\d{4}",
+    re.IGNORECASE,
+)
 
 _MONTHS = {
     "январь": 1, "февраль": 2, "март": 3, "апрель": 4,
@@ -34,13 +51,39 @@ _MONTHS = {
 }
 
 
+# Префиксы, по которым строка явно классифицируется как уровень CONTRACT.
+# Все варианты «доп* согл*» нормализуем до канонической формы перед сравнением.
 _CONTRACT_PREFIXES = (
-    "Договор", "Основной договор", "ДОГОВОР",
-    "Соглашение", "Допсоглашение", "ДС ", "Дополнительное соглашение",
-    "Счет на оплату", "Счёт на оплату", "Счет-оферта", "Счёт-оферта",
-    "СЧ ", "бн от", "бн  от",
+    "договор", "основной договор",
+    "соглашение", "допсоглашение", "допсогл", "дс ",
+    "дополнительное соглашение",
+    "счет на оплату", "счёт на оплату",
+    "счет-оферта", "счёт-оферта",
+    "счет ", "счёт ",
+    "сч ", "бн от", "бн  от",
+    "без договора",
 )
-_CONTRACT_LIKE_RE = re.compile(r"^(No?\d{3,}[-/]|\d{3,}[-/])")
+# Номер договора, начинающийся сразу с цифры/№ — без префикса «Договор»:
+# например «2021/03-1055/СКУД», «№2021/04-1059/СКУД», «No123/45».
+_CONTRACT_LIKE_RE = re.compile(r"^[№#]?\s*(No?)?\d{3,}[-/]")
+# Слово «договор» где-либо в строке (для «Гражданско-правовой ДОГОВОР …»).
+_CONTAINS_DOGOVOR_RE = re.compile(r"\bдоговор\b", re.IGNORECASE)
+# Имя физлица без ИНН: «КАШИН СТАНИСЛАВ ВЛАДИМИРОВИЧ», «Карташев Александр Владимирович»,
+# опционально с пометками типа «ФЛ _ почта». Только кириллица/пробелы/_-./.
+_PERSON_NAME_RE = re.compile(r"^[А-ЯЁа-яё][А-ЯЁа-яё\s_.\-]{4,}$")
+
+
+def _normalize_contract_name(name: str) -> str:
+    """Нормализует написания «Доп. согл.», «Доп сог.», «Доп.согл.» и т.п.
+    к одному префиксу «Допсоглашение», чтобы матч в _CONTRACT_PREFIXES сработал."""
+    # «Доп.согл.», «Доп. согл.», «Доп согл», «Доп.согл», «Доп  согл.», «Доп сог.»
+    # → «Допсоглашение»
+    return re.sub(
+        r"^(Доп)\.?\s*(сог)(л)?\.?(ашение)?\b",
+        r"Допсоглашение",
+        name,
+        flags=re.IGNORECASE,
+    )
 
 
 def detect_level(name: str, inn_cell: str) -> HierarchyLevel:
@@ -50,14 +93,45 @@ def detect_level(name: str, inn_cell: str) -> HierarchyLevel:
     if name.startswith("Итого"):
         return HierarchyLevel.TOTAL
 
+    # Технический маркер раскрытия группы 1С — игнорируем, это не ошибка.
+    if name.startswith("<") and name.endswith(">"):
+        return HierarchyLevel.GROUP_MARKER
+
     if inn_cell and _INN_RE.match(inn_cell):
         return HierarchyLevel.BUYER
 
-    if name.startswith(_CONTRACT_PREFIXES) or _CONTRACT_LIKE_RE.match(name):
+    name_lower = name.lower()
+
+    # Документы — Реализация, Поступление, Корректировка долга/реализации,
+    # Списание задолженности, Возврат товаров.
+    if name_lower.startswith((
+        "реализация", "поступление",
+        "корректировка долга", "корректировка реализации",
+        "списание задолженности", "возврат товаров",
+    )):
+        return HierarchyLevel.DOCUMENT
+
+    # Договоры. Сначала нормализуем «Доп* согл*» к канонической форме, потом
+    # сравниваем case-insensitive со списком префиксов.
+    normalized_lower = _normalize_contract_name(name).lower()
+    if normalized_lower.startswith(_CONTRACT_PREFIXES) or _CONTRACT_LIKE_RE.match(name):
         return HierarchyLevel.CONTRACT
 
-    if name.startswith(("Реализация", "Поступление")):
-        return HierarchyLevel.DOCUMENT
+    # Договор без явного префикса: строка вида «<номер> от DD.MM.YYYY»
+    # (например «0ББП-000045 от 28.03.2023», «№2025/01-1007/Р от 18.02.2025»).
+    if _BARE_CONTRACT_RE.match(name):
+        return HierarchyLevel.CONTRACT
+
+    # Строка содержит слово «договор» в любом месте — например
+    # «Гражданско-правовой ДОГОВОР (Контракт) № 18-ЗК-24-ХТ …».
+    if _CONTAINS_DOGOVOR_RE.search(name):
+        return HierarchyLevel.CONTRACT
+
+    # Физлицо-покупатель без ИНН в колонке B. В 1С такие встречаются —
+    # самозанятые, сотрудники-абоненты, частные заказчики.
+    # Распознаём по «голому» ФИО (только кириллица + минимум служебных символов).
+    if not inn_cell and _PERSON_NAME_RE.match(name):
+        return HierarchyLevel.BUYER
 
     return HierarchyLevel.UNKNOWN
 
@@ -84,11 +158,25 @@ def _detect_doc_type(name: str) -> str:
         return "sale"
     if name.startswith("Поступление"):
         return "payment"
+    if name.startswith(("Корректировка долга", "Корректировка реализации")):
+        return "correction"
+    if name.startswith("Списание задолженности"):
+        return "writeoff"
+    if name.startswith("Возврат товаров"):
+        return "refund"
     return "unknown"
 
 
 def _parse_period(text: str) -> tuple[date | None, date | None]:
-    match = _PERIOD_RE.search(text)
+    # Сначала пробуем новый формат с датами «за 01.01.2025 - 24.05.2026».
+    match = _PERIOD_RE_DATES.search(text)
+    if match:
+        start = _parse_date(match.group(1))
+        end = _parse_date(match.group(2))
+        return start, end
+
+    # Откатываемся на старый формат с русскими месяцами.
+    match = _PERIOD_RE_MONTHS.search(text)
     if not match:
         return None, None
     month_start = _MONTHS.get(match.group(1).lower())
@@ -98,7 +186,6 @@ def _parse_period(text: str) -> tuple[date | None, date | None]:
     if not month_start or not month_end:
         return None, None
     start = date(year_start, month_start, 1)
-    # Last day approximation: use first of next month - 1 day
     if month_end == 12:
         end = date(year_end, 12, 31)
     else:
@@ -207,6 +294,11 @@ def parse_debt_report(file_path: str | Path) -> ParseResult:
 
         if level == HierarchyLevel.TOTAL:
             break
+
+        # <...> — служебный маркер раскрытия группы 1С, без полезных данных.
+        # Пропускаем без записи в errors.
+        if level == HierarchyLevel.GROUP_MARKER:
+            continue
 
         # Read column values: C=debt_start, D=advance_start, E=sold, F=paid,
         # G=prepay_in, H=prepay_used, I=debt_end, J=advance_end

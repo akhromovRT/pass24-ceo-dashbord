@@ -119,8 +119,15 @@ class ImportService:
 
         contracts_count = 0
         documents_count = 0
+        skipped_no_inn = 0
 
         for buyer in parse_result.buyers:
+            # Физлица без ИНН в колонке B файла 1С — пропускаем на этом этапе.
+            # Они будут полноценно сохраняться в DebtSnapshot (этап 2 фикса);
+            # пока в Organization их нельзя положить, т.к. inn — уникальный.
+            if not buyer.inn:
+                skipped_no_inn += 1
+                continue
             org = self._process_buyer(buyer, import_run)
             for parsed_contract in buyer.contracts:
                 contract = self._process_contract(parsed_contract, org, import_run)
@@ -136,6 +143,7 @@ class ImportService:
         import_run.delta_summary = {
             "source": "debt_report",
             "skipped_duplicate_documents": self._skipped_dup_documents,
+            "skipped_buyers_no_inn": skipped_no_inn,
         }
         import_run.status = ImportStatus.COMPLETED
         import_run.completed_at = datetime.now(UTC)
