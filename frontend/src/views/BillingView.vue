@@ -7,7 +7,9 @@ import InputText from 'primevue/inputtext'
 import Tag from 'primevue/tag'
 import ProgressBar from 'primevue/progressbar'
 import SelectButton from 'primevue/selectbutton'
+import Select from 'primevue/select'
 import MultiSelect from 'primevue/multiselect'
+import { useToast } from 'primevue/usetoast'
 import { FilterMatchMode } from '@primevue/core/api'
 import VChart from 'vue-echarts'
 import { use } from 'echarts/core'
@@ -22,9 +24,50 @@ use([HeatmapChart, GridComponent, TooltipComponent, VisualMapComponent, CanvasRe
 
 const store = useOrganizationsStore()
 const router = useRouter()
+const toast = useToast()
 const search = ref('')
 const page = ref(1)
 const pageSize = 25
+
+const statusOptions = [
+  { label: 'Активен', value: 'active' },
+  { label: 'Приостановлен', value: 'suspended' },
+  { label: 'Отток', value: 'churned' },
+  { label: 'Транзит', value: 'transit' },
+  { label: 'Потенциальный', value: 'prospect' },
+]
+
+function statusSeverity(status: string): 'success' | 'secondary' | 'warn' | 'danger' | 'info' {
+  if (status === 'active') return 'success'
+  if (status === 'suspended') return 'warn'
+  if (status === 'churned') return 'danger'
+  if (status === 'prospect') return 'info'
+  return 'secondary'
+}
+
+async function changeClientStatus(item: any, newStatus: string) {
+  const prev = item.status
+  if (newStatus === prev) return
+  item.status = newStatus
+  try {
+    const updated = await store.updateOrganization(item.inn, { status: newStatus })
+    if (updated) Object.assign(item, updated)
+    const msg = newStatus === 'churned' && updated?.churn_month
+      ? `Месяц отключения: ${fmtChurnMonth(updated.churn_month)}`
+      : undefined
+    toast.add({
+      severity: 'success', summary: 'Статус обновлён',
+      detail: msg, life: 3000,
+    })
+  } catch (e: any) {
+    item.status = prev
+    const detail = e?.response?.data?.detail || 'Изменения не сохранены'
+    toast.add({
+      severity: 'error', summary: 'Не удалось сменить статус',
+      detail, life: 5000,
+    })
+  }
+}
 
 const mode = ref<'clients' | 'contracts' | 'registry' | 'matrix'>('clients')
 const modeOptions = [
@@ -375,9 +418,25 @@ function onMatrixClick(event: any) {
           <span v-else>—</span>
         </template>
       </Column>
-      <Column field="status" header="Статус" style="width: 110px">
+      <Column field="status" header="Статус" style="width: 170px">
         <template #body="{ data }">
-          <Tag :severity="data.status === 'active' ? 'success' : 'secondary'">{{ data.status }}</Tag>
+          <div class="status-cell" @click.stop>
+            <Tag
+              :severity="statusSeverity(data.status)"
+              class="status-dot"
+              :title="data.status"
+            />
+            <Select
+              :modelValue="data.status"
+              :options="statusOptions"
+              optionLabel="label"
+              optionValue="value"
+              @update:modelValue="(v: string) => changeClientStatus(data, v)"
+              class="status-inline-select"
+              size="small"
+              :pt="{ root: { 'aria-label': 'Статус клиента' } }"
+            />
+          </div>
         </template>
       </Column>
       <Column header="Отключён" style="width: 110px">
@@ -684,4 +743,30 @@ function onMatrixClick(event: any) {
 }
 .churn-cell { color: #b45309; font-size: 0.85rem; }
 .muted { color: #cbd5e1; }
+
+.status-cell {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: default;
+}
+.status-cell .status-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  min-width: 8px;
+  padding: 0;
+  border-radius: 50%;
+}
+.status-cell :deep(.p-select) {
+  width: 100%;
+  min-width: 0;
+}
+.status-cell :deep(.p-select-label) {
+  padding: 0.25rem 0.4rem;
+  font-size: 0.85rem;
+}
+.status-cell :deep(.p-select-dropdown) {
+  width: 1.8rem;
+}
 </style>
