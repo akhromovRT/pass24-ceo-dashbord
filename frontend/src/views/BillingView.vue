@@ -154,11 +154,10 @@ const registryFilters = ref<any>({
 const matrix = ref<any>({ months: [], orgs: [], cells: [], year: 0 })
 const matrixLoading = ref(false)
 const matrixSearch = ref('')
-const matrixSortMode = ref<'amount_desc' | 'name_asc' | 'name_desc'>('amount_desc')
+const matrixSortMode = ref<'amount_desc' | 'name_asc'>('amount_desc')
 const matrixSortOptions = [
   { label: 'По АП ↓', value: 'amount_desc' },
   { label: 'А → Я', value: 'name_asc' },
-  { label: 'Я → А', value: 'name_desc' },
 ]
 
 const objectTypeOptions = computed(() =>
@@ -391,8 +390,6 @@ const matrixFiltered = computed(() => {
 
   if (matrixSortMode.value === 'name_asc') {
     filtered.sort((a, b) => (a.name || '').localeCompare(b.name || '', 'ru'))
-  } else if (matrixSortMode.value === 'name_desc') {
-    filtered.sort((a, b) => (b.name || '').localeCompare(a.name || '', 'ru'))
   }
   // amount_desc — backend уже отдаёт в таком порядке (monthly_ap desc nulls last)
 
@@ -414,7 +411,9 @@ const matrixFiltered = computed(() => {
   return { orgs: filtered, cells }
 })
 
-const matrixHeight = computed(() => Math.max(360, Math.min(2400, matrixFiltered.value.orgs.length * 18)))
+// 22px на ряд — комфортно для шрифта 11px, без перекрытия меток.
+// Без верхнего ограничения — пусть страница скроллится, лишь бы все клиенты были видны.
+const matrixHeight = computed(() => Math.max(360, matrixFiltered.value.orgs.length * 22 + 90))
 const matrixChartOption = computed(() => {
   const { orgs, cells } = matrixFiltered.value
   if (!orgs.length) return {}
@@ -455,7 +454,7 @@ const matrixChartOption = computed(() => {
                (c.ratio != null ? `<br>Собираемость: <b>${c.ratio}%</b>` : '') + churnSuffix
       },
     },
-    grid: { left: 240, right: 30, top: 70, bottom: 30 },
+    grid: { left: 240, right: 30, top: 30, bottom: 30 },
     xAxis: {
       type: 'category', data: matrix.value.months,
       position: 'top', splitArea: { show: true },
@@ -463,18 +462,25 @@ const matrixChartOption = computed(() => {
     },
     yAxis: {
       type: 'category',
+      // inverse=true чтобы orgs[0] был наверху: amount_desc → крупнейший АП сверху,
+      // А→Я → буква А сверху, ниже Б, В, …, Я в самом низу.
+      inverse: true,
       data: orgs.map((o: any) => o.name.length > 32 ? o.name.substring(0, 30) + '…' : o.name),
       splitArea: { show: true },
-      axisLabel: { fontSize: 10, width: 220, overflow: 'truncate' },
+      axisLabel: {
+        fontSize: 11,
+        width: 230,
+        overflow: 'truncate',
+        // interval=0 принудительно рисует каждую метку, без авто-пропуска через одну.
+        interval: 0,
+      },
     },
     visualMap: {
+      // Слайдер легенды скрыт — пользователь просил убрать ползунок с процентами.
+      // Цветовое отображение собираемости остаётся.
+      show: false,
       min: 0, max: 100, calculable: false,
-      orient: 'horizontal', left: 'center', top: 30,
-      itemWidth: 12, itemHeight: 200,
       inRange: { color: ['#fef2f2', '#fee2e2', '#fed7aa', '#fef3c7', '#d1fae5', '#86efac', '#22c55e'] },
-      text: ['100%+', '0%'],
-      textStyle: { fontSize: 10 },
-      // Не применяем visualMap к churn-слою, иначе он перекрасит наш красный.
       seriesIndex: 0,
     },
     series: [
