@@ -399,26 +399,46 @@ def mrr_trend(session: Session = Depends(get_session)):
 
 
 @router.get("/payment-matrix")
-def payment_matrix(months: int = 12, session: Session = Depends(get_session)):
-    """Шахматка: ряд на клиента с monthly_ap > 0, колонки — месяцы.
-    План = Organization.monthly_ap. Факт = Σ аллокаций на начисление месяца."""
-    month_keys = _months_back(months)
-    month_labels = [f"{m:02d}/{y}" for y, m in month_keys]
+def payment_matrix(year: int | None = None, session: Session = Depends(get_session)):
+    """Шахматка: 12 месяцев календарного года (по умолчанию — текущего).
+
+    Включает active клиентов с monthly_ap>0 и churned/transit клиентов,
+    отключённых в выбранном году (churn_month попадает в [year-01-01..year-12-31]).
+    """
+    today = date.today()
+    target_year = year or today.year
+    month_keys = [(target_year, m) for m in range(1, 13)]
+    month_labels = [f"{m:02d}/{target_year}" for _, m in month_keys]
+
+    year_start = date(target_year, 1, 1)
+    year_end = date(target_year, 12, 31)
 
     orgs = session.exec(
         select(Organization)
         .where(
             _excl(),
-            Organization.status == OrgStatus.ACTIVE,
-            Organization.monthly_ap.is_not(None),  # type: ignore[union-attr]
-            Organization.monthly_ap > 0,  # type: ignore[operator]
+            (
+                (
+                    (Organization.status == OrgStatus.ACTIVE)
+                    & (Organization.monthly_ap.is_not(None))  # type: ignore[union-attr]
+                    & (Organization.monthly_ap > 0)  # type: ignore[operator]
+                )
+                | (
+                    Organization.status.in_(  # type: ignore[union-attr]
+                        [OrgStatus.CHURNED, OrgStatus.TRANSIT]
+                    )
+                    & (Organization.churn_month.is_not(None))  # type: ignore[union-attr]
+                    & (Organization.churn_month >= year_start)  # type: ignore[operator]
+                    & (Organization.churn_month <= year_end)  # type: ignore[operator]
+                )
+            ),
         )
-        .order_by(Organization.monthly_ap.desc())  # type: ignore[union-attr]
+        .order_by(Organization.monthly_ap.desc().nulls_last())  # type: ignore[union-attr]
     ).all()
 
     org_ids = [o.id for o in orgs]
     if not org_ids:
-        return {"months": month_labels, "orgs": [], "cells": []}
+        return {"months": month_labels, "year": target_year, "orgs": [], "cells": []}
 
     pay_rows = session.exec(
         select(
@@ -435,7 +455,11 @@ def payment_matrix(months: int = 12, session: Session = Depends(get_session)):
 
     orgs_out, cells = [], []
     for oi, org in enumerate(orgs):
-        plan = _f(org.monthly_ap)
+        plan = _f(org.monthly_ap) if org.monthly_ap else 0.0
+        churn_col: int | None = None
+        if org.churn_month and year_start <= org.churn_month <= year_end:
+            churn_col = org.churn_month.month - 1
+
         total_paid = 0.0
         for mi, (y, m) in enumerate(month_keys):
             paid = paid_lookup.get((org.id, y, m), 0.0)
@@ -449,9 +473,17 @@ def payment_matrix(months: int = 12, session: Session = Depends(get_session)):
             "id": str(org.id),
             "inn": org.inn,
             "name": org.name_display or org.name_1c,
+            "status": org.status.value if hasattr(org.status, "value") else org.status,
+            "churn_col": churn_col,
+            "churn_month": org.churn_month.isoformat() if org.churn_month else None,
             "monthly_plan": round(plan, 2),
             "total_paid_period": round(total_paid, 2),
             "expected_period": round(plan * len(month_keys), 2),
         })
 
-    return {"months": month_labels, "orgs": orgs_out, "cells": cells}
+    return {
+        "months": month_labels,
+        "year": target_year,
+        "orgs": orgs_out,
+        "cells": cells,
+    }

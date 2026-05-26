@@ -151,8 +151,15 @@ const registryFilters = ref<any>({
 })
 
 // Matrix mode state
-const matrix = ref<any>({ months: [], orgs: [], cells: [] })
+const matrix = ref<any>({ months: [], orgs: [], cells: [], year: 0 })
 const matrixLoading = ref(false)
+const matrixSearch = ref('')
+const matrixSortMode = ref<'amount_desc' | 'name_asc' | 'name_desc'>('amount_desc')
+const matrixSortOptions = [
+  { label: 'По АП ↓', value: 'amount_desc' },
+  { label: 'А → Я', value: 'name_asc' },
+  { label: 'Я → А', value: 'name_desc' },
+]
 
 const objectTypeOptions = computed(() =>
   [...new Set(registryItems.value.map(r => r.object_type).filter(Boolean))].sort()
@@ -206,7 +213,7 @@ async function loadRegistry() {
 async function loadMatrix() {
   matrixLoading.value = true
   try {
-    const res = await api.get('/dashboard/payment-matrix?months=12')
+    const res = await api.get('/dashboard/payment-matrix')
     matrix.value = res.data
   } finally {
     matrixLoading.value = false
@@ -249,6 +256,7 @@ watch(mode, () => {
   registryFilters.value.global.value = null
   clientSortBy.value = null
   clientSortDir.value = 'asc'
+  matrixSearch.value = ''
   loadData()
 })
 
@@ -364,21 +372,87 @@ const contractStatusLabel: Record<string, string> = {
 }
 
 // --- Шахматка платежей ---
-const matrixHeight = computed(() => Math.max(360, Math.min(2400, matrix.value.orgs.length * 18)))
+// Карта статусов для пометки в ячейке churn-месяца.
+const STATUS_LABEL_SHORT: Record<string, string> = {
+  churned: 'Отток',
+  transit: 'Транзит',
+}
+
+// Отфильтрованный + отсортированный список клиентов матрицы.
+// Меняем порядок строк → пересчитываем индексы (row) у cells/orgs.
+const matrixFiltered = computed(() => {
+  const orgs = matrix.value.orgs as any[]
+  if (!orgs.length) return { orgs: [], cells: [] }
+
+  const q = matrixSearch.value.trim().toLowerCase()
+  let filtered = q
+    ? orgs.filter(o => (o.name || '').toLowerCase().includes(q) || (o.inn || '').includes(q))
+    : [...orgs]
+
+  if (matrixSortMode.value === 'name_asc') {
+    filtered.sort((a, b) => (a.name || '').localeCompare(b.name || '', 'ru'))
+  } else if (matrixSortMode.value === 'name_desc') {
+    filtered.sort((a, b) => (b.name || '').localeCompare(a.name || '', 'ru'))
+  }
+  // amount_desc — backend уже отдаёт в таком порядке (monthly_ap desc nulls last)
+
+  const oldIdx = new Map<string, number>()
+  orgs.forEach((o, i) => oldIdx.set(o.id, i))
+  const newIdx = new Map<string, number>()
+  filtered.forEach((o, i) => newIdx.set(o.id, i))
+
+  const cells = (matrix.value.cells as any[])
+    .filter(c => {
+      const org = orgs[c.row]
+      return org && newIdx.has(org.id)
+    })
+    .map(c => {
+      const org = orgs[c.row]
+      return { ...c, row: newIdx.get(org.id)! }
+    })
+
+  return { orgs: filtered, cells }
+})
+
+const matrixHeight = computed(() => Math.max(360, Math.min(2400, matrixFiltered.value.orgs.length * 18)))
 const matrixChartOption = computed(() => {
-  if (!matrix.value.orgs.length) return {}
-  const heatmapData = matrix.value.cells.map((c: any) => [
-    c.col, c.row, c.ratio == null ? null : Math.min(150, c.ratio),
-  ])
+  const { orgs, cells } = matrixFiltered.value
+  if (!orgs.length) return {}
+  // Базовый слой heatmap — без churn-ячеек (их рендерим отдельным слоем).
+  const churnSet = new Set<string>()
+  orgs.forEach((o: any, i: number) => {
+    if (o.churn_col != null) churnSet.add(`${i}:${o.churn_col}`)
+  })
+  const heatmapData = cells
+    .filter((c: any) => !churnSet.has(`${c.row}:${c.col}`))
+    .map((c: any) => [c.col, c.row, c.ratio == null ? null : Math.min(150, c.ratio)])
+  // Отдельный слой — churn-ячейки с тёмно-красным фоном и пометкой статуса.
+  const churnData = orgs
+    .map((o: any, rowIdx: number) => ({ o, rowIdx }))
+    .filter(({ o }) => o.churn_col != null)
+    .map(({ o, rowIdx }) => ({
+      value: [o.churn_col, rowIdx, 0],
+      itemStyle: { color: '#b91c1c', borderColor: '#7f1d1d' },
+      label: {
+        show: true,
+        formatter: STATUS_LABEL_SHORT[o.status] || 'Отток',
+        color: '#fff',
+        fontSize: 9,
+        fontWeight: 'bold',
+      },
+    }))
   return {
     tooltip: {
       formatter: (p: any) => {
-        const c = matrix.value.cells.find((cc: any) => cc.row === p.value[1] && cc.col === p.value[0])
-        const org = matrix.value.orgs[p.value[1]]
+        const c = cells.find((cc: any) => cc.row === p.value[1] && cc.col === p.value[0])
+        const org = orgs[p.value[1]]
         const month = matrix.value.months[p.value[0]]
         if (!c || !org) return ''
+        const churnSuffix = (org.churn_col === p.value[0])
+          ? `<br><span style="color:#b91c1c"><b>${STATUS_LABEL_SHORT[org.status] || 'Отток'}</b> с этого месяца</span>`
+          : ''
         return `<b>${org.name}</b><br>${month}<br>План: <b>${formatCurrency(c.plan)}</b><br>Факт: <b>${formatCurrency(c.paid)}</b>` +
-               (c.ratio != null ? `<br>Собираемость: <b>${c.ratio}%</b>` : '')
+               (c.ratio != null ? `<br>Собираемость: <b>${c.ratio}%</b>` : '') + churnSuffix
       },
     },
     grid: { left: 240, right: 30, top: 70, bottom: 30 },
@@ -389,7 +463,7 @@ const matrixChartOption = computed(() => {
     },
     yAxis: {
       type: 'category',
-      data: matrix.value.orgs.map((o: any) => o.name.length > 32 ? o.name.substring(0, 30) + '…' : o.name),
+      data: orgs.map((o: any) => o.name.length > 32 ? o.name.substring(0, 30) + '…' : o.name),
       splitArea: { show: true },
       axisLabel: { fontSize: 10, width: 220, overflow: 'truncate' },
     },
@@ -400,20 +474,31 @@ const matrixChartOption = computed(() => {
       inRange: { color: ['#fef2f2', '#fee2e2', '#fed7aa', '#fef3c7', '#d1fae5', '#86efac', '#22c55e'] },
       text: ['100%+', '0%'],
       textStyle: { fontSize: 10 },
+      // Не применяем visualMap к churn-слою, иначе он перекрасит наш красный.
+      seriesIndex: 0,
     },
-    series: [{
-      type: 'heatmap',
-      data: heatmapData,
-      emphasis: { itemStyle: { borderColor: '#1e293b', borderWidth: 1 } },
-      itemStyle: { borderColor: '#f1f5f9', borderWidth: 1 },
-    }],
+    series: [
+      {
+        type: 'heatmap',
+        data: heatmapData,
+        emphasis: { itemStyle: { borderColor: '#1e293b', borderWidth: 1 } },
+        itemStyle: { borderColor: '#f1f5f9', borderWidth: 1 },
+      },
+      {
+        type: 'heatmap',
+        data: churnData,
+        emphasis: { itemStyle: { borderColor: '#1e293b', borderWidth: 1 } },
+        itemStyle: { borderColor: '#7f1d1d', borderWidth: 1 },
+        // Этот слой статичный — visualMap его не трогает (seriesIndex: 0 выше).
+      },
+    ],
   }
 })
 
 function onMatrixClick(event: any) {
   if (event.componentType !== 'series') return
   const row = event.value?.[1]
-  const org = matrix.value.orgs[row]
+  const org = matrixFiltered.value.orgs[row]
   if (org?.inn) router.push(`/clients/${org.inn}`)
 }
 </script>
@@ -430,6 +515,12 @@ function onMatrixClick(event: any) {
           :placeholder="mode === 'clients' ? 'Поиск по имени или ИНН...' :
                        mode === 'contracts' ? 'Поиск по контрагенту, ИНН, договору...' :
                        'Глобальный поиск по реестру...'"
+          class="search-input"
+        />
+        <InputText
+          v-else
+          v-model="matrixSearch"
+          placeholder="Поиск клиента в шахматке..."
           class="search-input"
         />
       </div>
@@ -530,18 +621,31 @@ function onMatrixClick(event: any) {
     <!-- Режим: Шахматка -->
     <div v-else-if="mode === 'matrix'" class="matrix-card">
       <div class="matrix-title">
-        Шахматка платежей: клиенты × месяцы
-        <span class="hint">▶ клик по строке — карточка клиента</span>
+        <span>
+          Шахматка платежей · {{ matrix.year || '—' }} · клиентов: {{ matrixFiltered.orgs.length }}<span v-if="matrixFiltered.orgs.length !== matrix.orgs.length"> / {{ matrix.orgs.length }}</span>
+        </span>
+        <span class="matrix-controls">
+          <SelectButton
+            v-model="matrixSortMode"
+            :options="matrixSortOptions"
+            optionLabel="label"
+            optionValue="value"
+            :allow-empty="false"
+            size="small"
+          />
+        </span>
+        <span class="hint">▶ клик по строке — карточка клиента · красная ячейка — месяц перехода в Отток/Транзит</span>
       </div>
       <v-chart
-        v-if="matrix.orgs.length"
+        v-if="matrixFiltered.orgs.length"
         :option="matrixChartOption"
         :style="{ height: matrixHeight + 'px' }"
         autoresize
         @click="onMatrixClick"
       />
       <div v-else-if="matrixLoading" class="empty-state">Загрузка…</div>
-      <div v-else class="empty-state">Нет активных подписчиков с АП.</div>
+      <div v-else-if="matrixSearch" class="empty-state">По запросу «{{ matrixSearch }}» клиенты не найдены.</div>
+      <div v-else class="empty-state">Нет клиентов для отображения.</div>
     </div>
 
     <!-- Режим: По договорам -->
@@ -786,13 +890,20 @@ function onMatrixClick(event: any) {
   font-size: 0.95rem;
   font-weight: 600;
   color: #1e293b;
-  margin-bottom: 0.5rem;
+  margin-bottom: 0.75rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
 }
 .matrix-title .hint {
   font-weight: 400;
   font-size: 0.8rem;
   color: #94a3b8;
-  margin-left: 0.5rem;
+}
+.matrix-controls {
+  display: inline-flex;
+  align-items: center;
 }
 .empty-state {
   padding: 2rem;
