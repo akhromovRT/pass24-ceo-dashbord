@@ -32,13 +32,15 @@ from app.models import (  # noqa: E402
 from app.parser.debt_report import parse_debt_report  # noqa: E402
 
 
-def _sum(buyers, field: str) -> Decimal:
+def _sum(buyers, field: str) -> Decimal | None:
     total = Decimal(0)
+    seen = False
     for b in buyers:
         v = getattr(b, field, None)
         if v is not None:
             total += v
-    return total
+            seen = True
+    return total if seen else None
 
 
 def backfill(import_run_id: uuid.UUID, file_path: Path) -> dict:
@@ -74,14 +76,14 @@ def backfill(import_run_id: uuid.UUID, file_path: Path) -> dict:
             filename=run.filename,
             period_start=parse_result.period_start,
             period_end=parse_result.period_end,
-            total_debt_start=_sum(parse_result.buyers, "debt_start") or None,
-            total_advance_start=_sum(parse_result.buyers, "advance_start") or None,
-            total_sold=_sum(parse_result.buyers, "sold") or None,
-            total_paid=_sum(parse_result.buyers, "paid") or None,
-            total_prepay_in=_sum(parse_result.buyers, "prepay_in") or None,
-            total_prepay_used=_sum(parse_result.buyers, "prepay_used") or None,
-            total_debt_end=_sum(parse_result.buyers, "debt_end") or None,
-            total_advance_end=_sum(parse_result.buyers, "advance_end") or None,
+            total_debt_start=_sum(parse_result.buyers, "debt_start"),
+            total_advance_start=_sum(parse_result.buyers, "advance_start"),
+            total_sold=_sum(parse_result.buyers, "sold"),
+            total_paid=_sum(parse_result.buyers, "paid"),
+            total_prepay_in=_sum(parse_result.buyers, "prepay_in"),
+            total_prepay_used=_sum(parse_result.buyers, "prepay_used"),
+            total_debt_end=_sum(parse_result.buyers, "debt_end"),
+            total_advance_end=_sum(parse_result.buyers, "advance_end"),
             buyers_count=parse_result.buyers_count,
             contracts_count=parse_result.contracts_count,
             documents_count=parse_result.documents_count,

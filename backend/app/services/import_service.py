@@ -209,27 +209,31 @@ class ImportService:
         """
         from decimal import Decimal
 
-        def _sum(field: str) -> Decimal:
+        def _sum(field: str) -> Decimal | None:
+            """Сумма поля по всем buyer-строкам. Возвращает None только если
+            ни у одного buyer это поле не заполнено (отличие от Decimal(0))."""
             total = Decimal(0)
+            seen = False
             for b in parse_result.buyers:
                 v = getattr(b, field, None)
                 if v is not None:
                     total += v
-            return total
+                    seen = True
+            return total if seen else None
 
         snapshot = DebtSnapshot(
             import_run_id=import_run.id,
             filename=parse_result.filename,
             period_start=parse_result.period_start,
             period_end=parse_result.period_end,
-            total_debt_start=_sum("debt_start") or None,
-            total_advance_start=_sum("advance_start") or None,
-            total_sold=_sum("sold") or None,
-            total_paid=_sum("paid") or None,
-            total_prepay_in=_sum("prepay_in") or None,
-            total_prepay_used=_sum("prepay_used") or None,
-            total_debt_end=_sum("debt_end") or None,
-            total_advance_end=_sum("advance_end") or None,
+            total_debt_start=_sum("debt_start"),
+            total_advance_start=_sum("advance_start"),
+            total_sold=_sum("sold"),
+            total_paid=_sum("paid"),
+            total_prepay_in=_sum("prepay_in"),
+            total_prepay_used=_sum("prepay_used"),
+            total_debt_end=_sum("debt_end"),
+            total_advance_end=_sum("advance_end"),
             buyers_count=parse_result.buyers_count,
             contracts_count=parse_result.contracts_count,
             documents_count=parse_result.documents_count,
