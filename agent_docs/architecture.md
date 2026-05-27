@@ -104,15 +104,17 @@ backend/
 │   │   ├── import_run.py   # ImportRun + ImportStatus
 │   │   ├── user.py         # User + UserRole
 │   │   ├── alert.py        # Alert + AlertType + AlertSeverity
-│   │   └── debt_snapshot.py # DebtSnapshot + DebtSnapshotRow + DebtSnapshotLevel
+│   │   ├── debt_snapshot.py # DebtSnapshot + DebtSnapshotRow + DebtSnapshotLevel
+│   │   └── debtor_workflow.py # DebtorWorkflow + DebtorWorkflowStatus (per-org проработка)
 │   ├── api/v1/
 │   │   ├── auth.py         # POST /auth/login
 │   │   ├── organizations.py # GET /organizations, /{inn}, /snapshots, /contracts
 │   │   ├── contracts.py    # GET /contracts (join + search + sort)
 │   │   ├── dashboard.py    # GET /dashboard/summary, /mrr-trend, /aging
-│   │   ├── billing.py      # GET /billing/debtors
+│   │   ├── billing.py      # GET /billing/debtors, /segments (включая objects_total)
 │   │   ├── imports.py      # POST /import/upload, GET /import/runs
-│   │   ├── debt_snapshots.py # GET /debt-snapshots, /latest, /{id} (UI «1С-вид»)
+│   │   ├── debt_snapshots.py # GET /debt-snapshots, /latest, /{id} (UI «1С-вид», only_regular)
+│   │   ├── debtor_workflow.py # PUT /debtor-workflow/{org_id} — статус+комментарий проработки
 │   │   └── alerts.py       # GET /alerts, PATCH /{id}
 │   ├── parser/
 │   │   ├── utils.py        # load_workbook_any() — .xls/.xlsx support
@@ -123,7 +125,7 @@ backend/
 │       └── import_service.py # ImportService.process_import() + _build_debt_snapshot()
 ├── scripts/
 │   └── backfill_debt_snapshot.py # Backfill DebtSnapshot для существующих ImportRun
-└── tests/                  # 245 passed, 9 skipped
+└── tests/                  # 252 passed, 9 skipped
 frontend/
 ├── nginx.conf              # Reverse proxy config (baked into image)
 ├── Dockerfile              # Multi-stage: node build → nginx
@@ -183,3 +185,4 @@ docker-compose.yml          # db + backend + frontend (без volumes)
 - `deals` — сделки/воронка (v2.0, но таблица создаётся в MVP)
 - `debt_snapshots` — полный срез файла «Задолженность покупателей» 1С на момент импорта (1-к-1 с `import_runs`): период, агрегированные итоги по 8 числовым полям, счётчики
 - `debt_snapshot_rows` — строки иерархии снимка (Покупатель/Договор/Документ через `parent_row_id`): все 8 числовых колонок файла + опциональные FK на `organizations`/`contracts`/`documents` для сверки и навигации. Сохраняет физлиц без ИНН (`organization_id=NULL`), которые в основной модели не помещаются из-за UNIQUE inn. См. ADR-019.
+- `debtor_workflow` — состояние проработки дебиторки по клиенту (PK = `organization_id`): статус (`not_started`/`in_progress`/`done`), текстовый комментарий, `updated_at`, `updated_by_id`. Привязка к Organization, а не к строке snapshot — переживает переимпорт 1С. См. ADR-020.
