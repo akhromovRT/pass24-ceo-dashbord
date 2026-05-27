@@ -9,6 +9,41 @@
 
 ## Записи
 
+### 2026-05-27 — Замечания Софьи от 26.05: workflow проработки + «Только наши клиенты» + «Объектов» в шапке реестра
+
+**Контекст:** анализ личной переписки с Софьей за 26.05 показал три не закрытых требования:
+1. В «1С-виде» дебиторки нужны колонки «Проработано / В работе» и «Комментарий» по каждому клиенту (чтобы менеджер мог отметить, кто разобран и оставить заметку);
+2. Фильтр «Только наши клиенты» — отсечь транзитных ЮЛ и потенциальных, оставить постоянных по реестру;
+3. В шапке реестра клиентов («По клиентам / Шахматка / По договорам / По реестру») — отдельная метрика «Количество объектов».
+
+**Что сделано:**
+- **Новая модель** `backend/app/models/debtor_workflow.py` — `DebtorWorkflow` с PK `organization_id` (привязка к клиенту, а не к row снимка, чтобы переживать переимпорт), enum `DebtorWorkflowStatus` = `not_started | in_progress | done`, `comment`, `updated_at`, `updated_by_id`. Миграция `b7c4e2f1a890_add_debtor_workflow.py` (head: `a3f1b9c47e02 → b7c4e2f1a890`), enum + CASCADE на удаление организации.
+- **Новый API** `backend/app/api/v1/debtor_workflow.py`:
+  - `PUT /api/v1/debtor-workflow/{org_id}` — upsert статуса и/или комментария, 400 если payload пустой, 404 если организации нет. Возвращает запись с `updated_by_name`.
+  - Хелпер `load_workflow_map(session, org_ids)` для встраивания workflow в чужие ответы одним SELECT (используется в `/debt-snapshots`).
+- **Расширен `/debt-snapshots`** (`debt_snapshots.py`):
+  - Новый query-параметр `only_regular: bool=false`. При `true` отсекаются buyer-строки, у которых organization не `in_registry=True` или статус не в `{active, suspended, churned}`. Каскадно отсекаются их дети (contract → document).
+  - В ответ добавлено `workflow_by_org: {org_id: {status, comment, updated_*}}` (для UI), `only_regular: bool` (эхо параметра).
+- **`/billing/segments`** возвращает `objects_total` — для каждой `in_registry`-компании: `len(client_objects)` если есть, иначе `objects_count_declared`, fallback 1.
+- **`/registry`** дополнительно возвращает `companies` и `objects` по той же формуле (для совместимости — в UI используется уже агрегат из `/billing/segments`).
+
+- **Frontend** `frontend/src/views/DebtorsView.vue`:
+  - В 1С-виде добавлен toggle «Только наши клиенты» рядом с «Только расхождения». Меняет `only_regular` → перезагрузка с бэка.
+  - Две новые колонки TreeTable на buyer-уровне:
+    - `Проработано` — PrimeVue `Select` (Не начато / В работе / Проработано) с цветовой подсветкой статуса.
+    - `Комментарий` — `Textarea` (autoResize, 1 строка) с сохранением на blur.
+  - Inline-сохранение через `PUT /debtor-workflow/{org_id}`: оптимистичное обновление + toast, при ошибке — откат draft.
+
+- **Frontend** `frontend/src/views/BillingView.vue`:
+  - В шапке (`SegmentBand` метрики) добавлен tile «Объектов: N» — из `/billing/segments`.
+
+**Тесты** (252 passed, 9 skipped, было 245):
+- `test_debtor_workflow_api.py`: 3 теста (create-then-update сохраняет статус при апдейте только comment; 400 на пустой payload; 404 на unknown org).
+- `test_debt_snapshots_api.py`: +3 теста — `workflow_by_org` приходит в ответе latest, `only_regular=true` дропает транзитного buyer и его детей, `only_regular` оставляет active+in_registry buyer вместе с детьми.
+- `test_api_billing.py`: +1 тест на `objects_total` (3 объекта + 5 declared + 1 fallback = 9).
+
+**Следующий шаг:** деплой миграции + проверка через Playwright на проде, объявление в `chat 1342` (Bitrix CEO Dashboard) с тегом Софьи.
+
 ### 2026-05-27 — Этап 3: UI «1С-вид» в разделе «Должники» + сверка с БД
 
 **Контекст:** этап 3 пятиэтапного плана работы с импортом 1С. Цель — дать CEO/бухгалтерии возможность открыть конкретный импорт «как в Excel-файле 1С» и быстро убедиться, что вся информация разнеслась правильно по клиентам.

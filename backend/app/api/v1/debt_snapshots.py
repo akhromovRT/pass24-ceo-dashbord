@@ -10,14 +10,21 @@ from __future__ import annotations
 import uuid
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session, select
 
 from app.api.v1.auth import get_current_user
+from app.api.v1.debtor_workflow import load_workflow_map
 from app.core.database import get_session
 from app.models import (
-    DebtSnapshot, DebtSnapshotLevel, DebtSnapshotRow, Organization,
+    DebtSnapshot, DebtSnapshotLevel, DebtSnapshotRow, Organization, OrgStatus,
 )
+
+# Какие статусы клиентов считаются «нашими постоянными» при фильтре
+# only_regular (МПП Софья, 2026-05-26): активные + временно приостановленные
+# + ушедшие в отток (по ним долг может оставаться, надо прорабатывать).
+# Транзитные и потенциальные — отсекаем, это шум для дебиторки.
+_REGULAR_STATUSES = {OrgStatus.ACTIVE, OrgStatus.SUSPENDED, OrgStatus.CHURNED}
 
 router = APIRouter(
     prefix="/debt-snapshots",
@@ -80,7 +87,9 @@ def _serialize_row(row: DebtSnapshotRow) -> dict:
     }
 
 
-def _build_full_response(session: Session, snap: DebtSnapshot) -> dict:
+def _build_full_response(
+    session: Session, snap: DebtSnapshot, only_regular: bool = False,
+) -> dict:
     rows = session.exec(
         select(DebtSnapshotRow)
         .where(DebtSnapshotRow.snapshot_id == snap.id)
@@ -92,18 +101,49 @@ def _build_full_response(session: Session, snap: DebtSnapshot) -> dict:
     # и сравниваем с DebtSnapshotRow.debt_end. Помечаем расхождения > 1 ₽.
     org_ids = {r.organization_id for r in rows if r.organization_id}
     actual_totals: dict[str, dict] = {}
+    org_full_map: dict[uuid.UUID, Organization] = {}
     if org_ids:
         orgs = session.exec(
             select(Organization).where(Organization.id.in_(org_ids))  # type: ignore[union-attr]
         ).all()
         for o in orgs:
+            org_full_map[o.id] = o
             actual_totals[str(o.id)] = {
                 "name_display": o.name_display,
                 "name_1c": o.name_1c,
                 "actual_total_debt": _f(o.total_debt),
                 "status": o.status.value if hasattr(o.status, "value") else o.status,
                 "excluded_from_analytics": o.excluded_from_analytics,
+                "in_registry": o.in_registry,
             }
+
+    # Workflow проработки по каждому buyer (status + comment) — одним SELECT.
+    workflow_map = load_workflow_map(session, org_ids)
+
+    # Фильтр only_regular: оставляем только buyers, чьи Organization
+    # in_registry=True и status in {active, suspended, churned}. Транзит
+    # и потенциальные — отсекаем (это шум для разбора дебиторки).
+    # Затем строим множество разрешённых buyer-row-id и каскадно
+    # включаем их детей (contract → document) по parent_row_id.
+    if only_regular:
+        allowed_buyer_ids: set[uuid.UUID] = set()
+        for r in rows:
+            if r.level != DebtSnapshotLevel.BUYER:
+                continue
+            org = org_full_map.get(r.organization_id) if r.organization_id else None
+            if org and org.in_registry and org.status in _REGULAR_STATUSES:
+                allowed_buyer_ids.add(r.id)
+
+        # Каскад: child включается, если parent в разрешённом множестве
+        # (для дерева buyer→contract→document достаточно одного прохода
+        # по row_index, потому что parent всегда идёт раньше child в файле).
+        allowed_row_ids = set(allowed_buyer_ids)
+        for r in rows:
+            if r.id in allowed_row_ids:
+                continue
+            if r.parent_row_id and r.parent_row_id in allowed_row_ids:
+                allowed_row_ids.add(r.id)
+        rows = [r for r in rows if r.id in allowed_row_ids]
 
     diffs = []
     for r in rows:
@@ -131,7 +171,9 @@ def _build_full_response(session: Session, snap: DebtSnapshot) -> dict:
         "snapshot": _serialize_snapshot_meta(snap),
         "rows": [_serialize_row(r) for r in rows],
         "actual_org_totals": actual_totals,
+        "workflow_by_org": workflow_map,
         "diffs": diffs,
+        "only_regular": only_regular,
     }
 
 
@@ -145,20 +187,27 @@ def list_snapshots(session: Session = Depends(get_session)):
 
 
 @router.get("/latest")
-def get_latest_snapshot(session: Session = Depends(get_session)):
+def get_latest_snapshot(
+    only_regular: bool = Query(default=False),
+    session: Session = Depends(get_session),
+):
     snap = session.exec(
         select(DebtSnapshot).order_by(DebtSnapshot.created_at.desc())  # type: ignore[union-attr]
     ).first()
     if not snap:
         raise HTTPException(status_code=404, detail="No debt snapshots yet")
-    return _build_full_response(session, snap)
+    return _build_full_response(session, snap, only_regular=only_regular)
 
 
 @router.get("/{snapshot_id}")
-def get_snapshot(snapshot_id: uuid.UUID, session: Session = Depends(get_session)):
+def get_snapshot(
+    snapshot_id: uuid.UUID,
+    only_regular: bool = Query(default=False),
+    session: Session = Depends(get_session),
+):
     snap = session.exec(
         select(DebtSnapshot).where(DebtSnapshot.id == snapshot_id)
     ).first()
     if not snap:
         raise HTTPException(status_code=404, detail="Snapshot not found")
-    return _build_full_response(session, snap)
+    return _build_full_response(session, snap, only_regular=only_regular)

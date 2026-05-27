@@ -8,6 +8,7 @@ import Tag from 'primevue/tag'
 import Select from 'primevue/select'
 import SelectButton from 'primevue/selectbutton'
 import InputText from 'primevue/inputtext'
+import Textarea from 'primevue/textarea'
 import { useToast } from 'primevue/usetoast'
 import api from '../api/client'
 import SegmentBand from '../components/SegmentBand.vue'
@@ -138,6 +139,13 @@ const selectedSnapshotId = ref<string | null>(null)
 const sourceData = ref<any | null>(null)
 const sourceSearch = ref('')
 const showOnlyDiffs = ref(false)
+const onlyRegular = ref(false)
+
+const workflowStatusOptions = [
+  { label: 'Не начато', value: 'not_started' },
+  { label: 'В работе', value: 'in_progress' },
+  { label: 'Проработано', value: 'done' },
+]
 
 async function loadSnapshots() {
   const res = await api.get('/debt-snapshots')
@@ -151,12 +159,17 @@ async function loadSource(snapshotId: string | null = null) {
     const url = snapshotId
       ? `/debt-snapshots/${snapshotId}`
       : '/debt-snapshots/latest'
-    const res = await api.get(url)
+    const res = await api.get(url, {
+      params: { only_regular: onlyRegular.value },
+    })
     sourceData.value = res.data
     selectedSnapshotId.value = res.data.snapshot.id
   } catch (e: any) {
     if (e?.response?.status === 404) {
-      sourceData.value = { snapshot: null, rows: [], actual_org_totals: {}, diffs: [] }
+      sourceData.value = {
+        snapshot: null, rows: [], actual_org_totals: {},
+        workflow_by_org: {}, diffs: [],
+      }
     } else {
       toast.add({
         severity: 'error', summary: 'Не удалось загрузить 1С-вид',
@@ -171,6 +184,59 @@ async function loadSource(snapshotId: string | null = null) {
 watch(selectedSnapshotId, (v, prev) => {
   if (v && v !== prev && v !== sourceData.value?.snapshot?.id) loadSource(v)
 })
+
+// При смене фильтра «Только наши клиенты» перезагружаем с бэка,
+// потому что фильтрация делается на сервере (с каскадом по дереву).
+watch(onlyRegular, () => {
+  if (mode.value === 'source') loadSource(selectedSnapshotId.value)
+})
+
+// Локальная мапа workflow для inline-редактирования (без перезагрузки всего вида).
+const workflowDraft = ref<Record<string, { status: string; comment: string }>>({})
+
+function getWorkflow(orgId: string | null): { status: string; comment: string } {
+  if (!orgId) return { status: 'not_started', comment: '' }
+  if (workflowDraft.value[orgId]) return workflowDraft.value[orgId]
+  const fromServer = sourceData.value?.workflow_by_org?.[orgId]
+  return {
+    status: fromServer?.status || 'not_started',
+    comment: fromServer?.comment || '',
+  }
+}
+
+const savingWorkflowOrg = ref<string | null>(null)
+
+async function saveWorkflow(
+  orgId: string,
+  changes: { status?: string; comment?: string },
+) {
+  const current = getWorkflow(orgId)
+  const next = { ...current, ...changes }
+  // Локально обновляем мгновенно — UX отзывчивее.
+  workflowDraft.value[orgId] = next
+  savingWorkflowOrg.value = orgId
+  try {
+    const res = await api.put(`/debtor-workflow/${orgId}`, changes)
+    // Синхронизируем sourceData.workflow_by_org с сервером.
+    if (sourceData.value) {
+      sourceData.value.workflow_by_org = sourceData.value.workflow_by_org || {}
+      sourceData.value.workflow_by_org[orgId] = res.data
+    }
+    toast.add({
+      severity: 'success', summary: 'Сохранено',
+      detail: changes.status ? 'Статус обновлён' : 'Комментарий обновлён',
+      life: 1500,
+    })
+  } catch (e: any) {
+    delete workflowDraft.value[orgId]
+    toast.add({
+      severity: 'error', summary: 'Не удалось сохранить',
+      detail: e?.response?.data?.detail || 'Ошибка сервера', life: 4000,
+    })
+  } finally {
+    savingWorkflowOrg.value = null
+  }
+}
 
 // Маппинг snapshot rows → дерево PrimeVue TreeTable.
 // Помечаем строки, по которым найдено расхождение с БД.
@@ -399,6 +465,11 @@ const sourceSnapshotLabel = (s: any) =>
           <input type="checkbox" v-model="showOnlyDiffs" />
           Только расхождения
         </label>
+        <label class="source-toggle" :class="{ active: onlyRegular }"
+               title="Скрыть транзитные ЮЛ и потенциальных — оставить только постоянных клиентов из реестра">
+          <input type="checkbox" v-model="onlyRegular" />
+          Только наши клиенты
+        </label>
       </div>
 
       <SegmentBand
@@ -470,6 +541,43 @@ const sourceSnapshotLabel = (s: any) =>
         </Column>
         <Column field="advance_end" header="Аванс (кон)" style="width: 130px">
           <template #body="{ node }">{{ fmtRub(node.data.advance_end) }}</template>
+        </Column>
+        <Column header="Проработано" style="width: 170px">
+          <template #body="{ node }">
+            <Select
+              v-if="node.data.level === 'buyer' && node.data.organization_id"
+              :modelValue="getWorkflow(node.data.organization_id).status"
+              :options="workflowStatusOptions"
+              optionLabel="label"
+              optionValue="value"
+              size="small"
+              :loading="savingWorkflowOrg === node.data.organization_id"
+              :class="['wf-status', `wf-${getWorkflow(node.data.organization_id).status}`]"
+              @update:modelValue="(v: string) => saveWorkflow(node.data.organization_id, { status: v })"
+              @click.stop
+            />
+            <span v-else class="muted">—</span>
+          </template>
+        </Column>
+        <Column header="Комментарий" style="min-width: 220px">
+          <template #body="{ node }">
+            <Textarea
+              v-if="node.data.level === 'buyer' && node.data.organization_id"
+              :modelValue="getWorkflow(node.data.organization_id).comment"
+              @update:modelValue="(v: string) => { workflowDraft[node.data.organization_id] = { ...getWorkflow(node.data.organization_id), comment: v } }"
+              @blur="(e: any) => {
+                const v = e.target.value
+                const current = sourceData?.workflow_by_org?.[node.data.organization_id]?.comment || ''
+                if (v !== current) saveWorkflow(node.data.organization_id, { comment: v })
+              }"
+              rows="1"
+              autoResize
+              class="wf-comment"
+              placeholder="Заметка по проработке…"
+              @click.stop
+            />
+            <span v-else class="muted">—</span>
+          </template>
         </Column>
       </TreeTable>
     </template>
@@ -579,5 +687,17 @@ const sourceSnapshotLabel = (s: any) =>
   padding: 2rem;
   text-align: center;
   color: #64748b;
+}
+.wf-status :deep(.p-select-label) {
+  font-size: 0.8rem;
+}
+.wf-not_started :deep(.p-select-label) { color: #64748b; }
+.wf-in_progress :deep(.p-select-label) { color: #b45309; font-weight: 600; }
+.wf-done :deep(.p-select-label) { color: #15803d; font-weight: 600; }
+.wf-comment {
+  width: 100%;
+  font-size: 0.8rem;
+  min-height: 28px;
+  resize: vertical;
 }
 </style>

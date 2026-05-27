@@ -37,8 +37,13 @@ def list_registry(
         by_org.setdefault(o.organization_id, []).append(o)
 
     items = []
+    objects_total = 0
     for org in orgs:
         org_objects = by_org.get(org.id, [])
+        # «Количество объектов» (Софья, 2026-05-26): фактические client_objects,
+        # иначе objects_count_declared из реестра, fallback — 1 (одна Organization
+        # в реестре = минимум один объект, иначе её бы здесь не было).
+        objects_total += len(org_objects) if org_objects else (org.objects_count_declared or 1)
         if org_objects:
             for co in org_objects:
                 items.append({
@@ -85,4 +90,9 @@ def list_registry(
                 "total_debt": float(org.total_debt) if org.total_debt is not None else None,
             })
 
-    return {"items": items, "total": len(items)}
+    return {
+        "items": items,
+        "total": len(items),
+        "companies": len(orgs),
+        "objects": objects_total,
+    }

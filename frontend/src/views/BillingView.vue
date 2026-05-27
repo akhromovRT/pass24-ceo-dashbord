@@ -272,6 +272,7 @@ const segmentMetrics = computed(() => {
   if (!s) return []
   return [
     { label: 'Клиентов', value: String(s.total) },
+    { label: 'Объектов', value: s.objects_total != null ? String(s.objects_total) : '—' },
     { label: 'MRR план', value: formatCurrency(s.mrr_plan) },
     { label: 'Платят', value: String(s.paying) },
     { label: 'Частично', value: String(s.partial) },

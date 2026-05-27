@@ -10,6 +10,7 @@ from app.core.database import get_session
 from app.main import app
 from app.models import (
     ChargeSource,
+    ClientObject,
     MonthlyCharge,
     Organization,
     OrgStatus,
@@ -47,6 +48,34 @@ def test_segments_counts(client, db_session: Session):
         assert key in body
     assert body["total"] == 1
     assert body["debtors"] == 1
+    # Без записей в client_objects fallback на objects_count_declared|1.
+    assert body["objects_total"] == 1
+
+
+def test_segments_objects_total_counts_client_objects(
+    client, db_session: Session,
+):
+    org1 = Organization(inn="7700000011", name_1c="С тремя объектами",
+                        status=OrgStatus.ACTIVE, monthly_ap=Decimal("10000"),
+                        in_registry=True)
+    org2 = Organization(inn="7700000012", name_1c="С заявленными 5",
+                        status=OrgStatus.ACTIVE, monthly_ap=Decimal("10000"),
+                        in_registry=True, objects_count_declared=5)
+    org3 = Organization(inn="7700000013", name_1c="Без объектов",
+                        status=OrgStatus.ACTIVE, monthly_ap=Decimal("10000"),
+                        in_registry=True)
+    db_session.add_all([org1, org2, org3])
+    db_session.commit()
+    # У org1 — три записи в client_objects
+    for i in range(3):
+        db_session.add(ClientObject(
+            organization_id=org1.id, name=f"Объект {i+1}",
+        ))
+    db_session.commit()
+
+    body = client.get("/api/v1/billing/segments").json()
+    # org1: 3 (по факту), org2: 5 (declared), org3: 1 (fallback)
+    assert body["objects_total"] == 3 + 5 + 1
 
 
 def test_debtors_have_aging_fields(client, db_session: Session):

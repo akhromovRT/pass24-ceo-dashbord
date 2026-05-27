@@ -5,7 +5,7 @@ from sqlmodel import Session, func, select
 
 from app.api.v1.auth import get_current_user
 from app.core.database import get_session
-from app.models import DocType, Document, Organization
+from app.models import ClientObject, DocType, Document, Organization
 from app.services.aging import aging_index
 
 router = APIRouter(
@@ -82,6 +82,25 @@ def segments(session: Session = Depends(get_session)):
 
     total = len(orgs)
     mrr_plan = sum(float(o.monthly_ap or 0) for o in orgs)
+
+    # «Количество объектов» по реестру (Софья, 2026-05-26): сумма фактических
+    # client_objects по in_registry-компаниям; если у компании нет записей —
+    # objects_count_declared; fallback — 1.
+    org_ids_set = {o.id for o in orgs}
+    objs_by_org: dict = {}
+    if org_ids_set:
+        for co in session.exec(
+            select(ClientObject).where(
+                ClientObject.organization_id.in_(org_ids_set)  # type: ignore[union-attr]
+            )
+        ).all():
+            objs_by_org.setdefault(co.organization_id, 0)
+            objs_by_org[co.organization_id] += 1
+    objects_total = sum(
+        objs_by_org[o.id] if o.id in objs_by_org else (o.objects_count_declared or 1)
+        for o in orgs
+    )
+
     paying = partial = not_paying = debtors = 0
     for o in orgs:
         plan = float(o.monthly_ap or 0)
@@ -100,5 +119,6 @@ def segments(session: Session = Depends(get_session)):
         "total": total, "mrr_plan": round(mrr_plan, 2),
         "paying": paying, "partial": partial,
         "not_paying": not_paying, "debtors": debtors,
+        "objects_total": objects_total,
         "fact_month": f"{prev_y}-{prev_m:02d}",
     }

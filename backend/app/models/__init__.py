@@ -13,3 +13,4 @@ from app.models.report_template import ReportTemplate  # noqa: F401
 from app.models.debt_snapshot import (  # noqa: F401
     DebtSnapshot, DebtSnapshotRow, DebtSnapshotLevel,
 )
+from app.models.debtor_workflow import DebtorWorkflow, DebtorWorkflowStatus  # noqa: F401

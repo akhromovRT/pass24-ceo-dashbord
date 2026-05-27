@@ -7,7 +7,10 @@ from sqlmodel import Session
 
 from app.core.database import get_session
 from app.main import app
-from app.models import DebtSnapshot, DebtSnapshotLevel, DebtSnapshotRow, Organization
+from app.models import (
+    DebtorWorkflow, DebtorWorkflowStatus, DebtSnapshot, DebtSnapshotLevel,
+    DebtSnapshotRow, Organization, OrgStatus,
+)
 from app.parser.debt_report import (
     ParsedBuyer, ParsedContract, ParsedDocument, ParseResult,
 )
@@ -130,5 +133,92 @@ class TestDiffDetection:
             assert diff["file_debt_end"] == 0.0
             assert diff["db_total_debt"] == 12345.67
             assert diff["delta"] == -12345.67
+        finally:
+            app.dependency_overrides.clear()
+
+
+class TestWorkflowInResponse:
+    def test_workflow_attached_to_buyer(self, db_session: Session):
+        _seed(db_session)
+        # Засеваем workflow для нашего ЮЛ.
+        org = db_session.query(Organization).filter(
+            Organization.inn == "7700000001"
+        ).one()
+        db_session.add(DebtorWorkflow(
+            organization_id=org.id,
+            status=DebtorWorkflowStatus.IN_PROGRESS,
+            comment="Звонил 27.05, обещают оплату",
+        ))
+        db_session.commit()
+
+        client = _client_with_session(db_session)
+        try:
+            r = client.get("/api/v1/debt-snapshots/latest")
+            assert r.status_code == 200
+            d = r.json()
+            wf_map = d["workflow_by_org"]
+            assert str(org.id) in wf_map
+            entry = wf_map[str(org.id)]
+            assert entry["status"] == "in_progress"
+            assert entry["comment"] == "Звонил 27.05, обещают оплату"
+        finally:
+            app.dependency_overrides.clear()
+
+
+def _mark_in_registry(db_session: Session, inn: str) -> Organization:
+    """Импорт-сервис не ставит in_registry автоматически, а only_regular
+    требует его. Помечаем вручную для тестов фильтра."""
+    org = db_session.query(Organization).filter(Organization.inn == inn).one()
+    org.in_registry = True
+    db_session.add(org)
+    db_session.commit()
+    db_session.refresh(org)
+    return org
+
+
+class TestOnlyRegularFilter:
+    def test_filter_drops_transit_buyers(self, db_session: Session):
+        _seed(db_session)
+        # Делаем нашего единственного buyer'а транзитом — он должен
+        # отфильтроваться при only_regular=true, и список rows станет пустым.
+        org = _mark_in_registry(db_session, "7700000001")
+        org.status = OrgStatus.TRANSIT
+        db_session.add(org)
+        db_session.commit()
+
+        client = _client_with_session(db_session)
+        try:
+            # Без фильтра — все 3 строки на месте.
+            r = client.get("/api/v1/debt-snapshots/latest")
+            assert len(r.json()["rows"]) == 3
+
+            # С фильтром — пусто, buyer выбит, дети тоже.
+            r = client.get(
+                "/api/v1/debt-snapshots/latest",
+                params={"only_regular": "true"},
+            )
+            assert r.status_code == 200
+            d = r.json()
+            assert d["only_regular"] is True
+            assert d["rows"] == []
+        finally:
+            app.dependency_overrides.clear()
+
+    def test_active_buyer_keeps_children(self, db_session: Session):
+        _seed(db_session)
+        _mark_in_registry(db_session, "7700000001")
+        # buyer active + in_registry, проверяем что only_regular его пропускает
+        # вместе с детьми (contract + document).
+        client = _client_with_session(db_session)
+        try:
+            r = client.get(
+                "/api/v1/debt-snapshots/latest",
+                params={"only_regular": "true"},
+            )
+            assert r.status_code == 200
+            d = r.json()
+            assert d["only_regular"] is True
+            levels = [row["level"] for row in d["rows"]]
+            assert levels == ["buyer", "contract", "document"]
         finally:
             app.dependency_overrides.clear()
