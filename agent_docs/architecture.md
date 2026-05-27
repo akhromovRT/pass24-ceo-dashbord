@@ -55,13 +55,14 @@ CEO24 — веб-приложение с монолитной архитекту
 
 1. Бухгалтер формирует отчёт «Задолженность покупателей» в 1С → XLS/XLSX
 2. Загрузка через UI (`/api/v1/import/upload`) или cron из `/import/inbox/`
-3. Парсер: валидация → разбор иерархии → нормализация имён → автоклассификация контрактов
+3. Парсер: валидация → разбор иерархии (Покупатель→Договор→Документ, включая Корректировки/Допсоглашения/физлица без ИНН/служебные `<…>` — см. ADR-019) → нормализация имён → автоклассификация контрактов
 4. Дельта-детекция: сравнение с предыдущим snapshot (новые клиенты, рост долгов, закрытие)
 5. Загрузка: INSERT/UPDATE в `organizations`, `contracts`, `documents`
-6. Агрегация: пересчёт `monthly_snapshots` за период
-7. Метрики: payment_score, DSO, collectability
-8. Алерты: проверка пороговых значений
-9. API → Vue SPA → дашборд, таблицы, графики
+6. **DebtSnapshot**: одновременно с основным импортом пишется полный срез файла 1С (`debt_snapshots` + `debt_snapshot_rows`) — все 8 числовых колонок включая авансы и предоплаты, иерархия через `parent_row_id` (см. ADR-019). Используется для UI «1С-вид» и сверки.
+7. Агрегация: пересчёт `monthly_snapshots` за период
+8. Метрики: payment_score, DSO, collectability
+9. Алерты: проверка пороговых значений
+10. API → Vue SPA → дашборд, таблицы, графики
 
 Банковская выписка обрабатывается аналогично (шаги 1-3), но матчит платежи по ИНН с существующими организациями.
 
@@ -102,7 +103,8 @@ backend/
 │   │   ├── snapshot.py     # MonthlySnapshot
 │   │   ├── import_run.py   # ImportRun + ImportStatus
 │   │   ├── user.py         # User + UserRole
-│   │   └── alert.py        # Alert + AlertType + AlertSeverity
+│   │   ├── alert.py        # Alert + AlertType + AlertSeverity
+│   │   └── debt_snapshot.py # DebtSnapshot + DebtSnapshotRow + DebtSnapshotLevel
 │   ├── api/v1/
 │   │   ├── auth.py         # POST /auth/login
 │   │   ├── organizations.py # GET /organizations, /{inn}, /snapshots, /contracts
@@ -110,6 +112,7 @@ backend/
 │   │   ├── dashboard.py    # GET /dashboard/summary, /mrr-trend, /aging
 │   │   ├── billing.py      # GET /billing/debtors
 │   │   ├── imports.py      # POST /import/upload, GET /import/runs
+│   │   ├── debt_snapshots.py # GET /debt-snapshots, /latest, /{id} (UI «1С-вид»)
 │   │   └── alerts.py       # GET /alerts, PATCH /{id}
 │   ├── parser/
 │   │   ├── utils.py        # load_workbook_any() — .xls/.xlsx support
@@ -117,8 +120,10 @@ backend/
 │   │   ├── debt_report.py  # parse_debt_report()
 │   │   └── bank_statement.py # parse_bank_statement()
 │   └── services/
-│       └── import_service.py # ImportService.process_import()
-└── tests/                  # 74 тестов
+│       └── import_service.py # ImportService.process_import() + _build_debt_snapshot()
+├── scripts/
+│   └── backfill_debt_snapshot.py # Backfill DebtSnapshot для существующих ImportRun
+└── tests/                  # 245 passed, 9 skipped
 frontend/
 ├── nginx.conf              # Reverse proxy config (baked into image)
 ├── Dockerfile              # Multi-stage: node build → nginx
@@ -133,10 +138,11 @@ frontend/
 │   │   └── Sidebar.vue     # Навигация: Dashboard, Реестр клиентов, Должники, Импорт
 │   └── views/
 │       ├── LoginView.vue
-│       ├── BillingView.vue      # Режим: По клиентам / По договорам
+│       ├── BillingView.vue      # Режимы: По клиентам / Шахматка / По договорам / По реестру
 │       ├── ClientCardView.vue
 │       ├── DashboardView.vue
-│       ├── DebtorsView.vue
+│       ├── DebtorsView.vue      # Режимы: Реестр должников / 1С-вид (TreeTable)
+│       ├── ReportsView.vue
 │       └── ImportView.vue
 docker-compose.yml          # db + backend + frontend (без volumes)
 ```
@@ -175,3 +181,5 @@ docker-compose.yml          # db + backend + frontend (без volumes)
 - `users` — пользователи (имя, email, роль)
 - `alerts` — алерты (тип, severity, статус)
 - `deals` — сделки/воронка (v2.0, но таблица создаётся в MVP)
+- `debt_snapshots` — полный срез файла «Задолженность покупателей» 1С на момент импорта (1-к-1 с `import_runs`): период, агрегированные итоги по 8 числовым полям, счётчики
+- `debt_snapshot_rows` — строки иерархии снимка (Покупатель/Договор/Документ через `parent_row_id`): все 8 числовых колонок файла + опциональные FK на `organizations`/`contracts`/`documents` для сверки и навигации. Сохраняет физлиц без ИНН (`organization_id=NULL`), которые в основной модели не помещаются из-за UNIQUE inn. См. ADR-019.
