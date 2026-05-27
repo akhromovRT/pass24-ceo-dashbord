@@ -10,3 +10,6 @@ from app.models.tariff_period import TariffPeriod  # noqa: F401
 from app.models.monthly_charge import MonthlyCharge, ChargeSource  # noqa: F401
 from app.models.payment_allocation import PaymentAllocation, AllocationBasis  # noqa: F401
 from app.models.report_template import ReportTemplate  # noqa: F401
+from app.models.debt_snapshot import (  # noqa: F401
+    DebtSnapshot, DebtSnapshotRow, DebtSnapshotLevel,
+)

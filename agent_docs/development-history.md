@@ -9,6 +9,41 @@
 
 ## Записи
 
+### 2026-05-27 — Этап 2: модель DebtSnapshot и сохранение полного среза 1С при импорте
+
+**Контекст:** этап 2 пятиэтапного плана работы с импортом 1С. Цель — на каждый импорт файла «Задолженность покупателей» сохранять полный срез: Покупатель → Договор → Документ × все 8 числовых колонок (Долг/Аванс на начало/конец, Продано/Оплачено, Поступило/Зачтено предоплата). Это нужно для UI «1С-вид» (этап 3) и автосверки (этап 4); в основной модели Organization/Contract/Document авансы и предоплаты не хранятся.
+
+**Что сделано:**
+- **Новые таблицы** `debt_snapshots` и `debt_snapshot_rows` (`backend/app/models/debt_snapshot.py`):
+  - `DebtSnapshot`: 1-к-1 с `ImportRun` (для debt-импорта). Хранит filename, период, агрегированные итоги по всем 8 колонкам, счётчики (buyers/contracts/documents/buyers_no_inn).
+  - `DebtSnapshotRow`: одна запись на каждую строку файла (buyer/contract/document). Поля `parent_row_id` (для иерархии) + `row_index` (для сохранения порядка из файла) + все 8 числовых полей + опциональные FK на `Organization` / `Contract` / `Document` для сопоставления с реальными сущностями БД.
+- **Миграция Alembic** `a3f1b9c47e02_add_debt_snapshots.py` (head: `d8e2b91f5a7c → a3f1b9c47e02`). Включая enum `debtsnapshotlevel`, CASCADE на удаление snapshot/import_run и SET NULL на удаление organization/contract/document.
+- **Интеграция в `import_service.process_import`**:
+  - При обходе buyers/contracts/documents запоминаются сопоставления `id(parsed_obj) → созданная сущность БД`.
+  - После основной обработки вызывается `_build_debt_snapshot(...)` — пишет `DebtSnapshot` + дерево `DebtSnapshotRow` в той же транзакции (commit вместе с import_run).
+  - Физлица без ИНН: в `Organization` не пишутся (UNIQUE на inn), но в `DebtSnapshot` сохраняются полностью с `organization_id=NULL`. Аналогично — все 8 колонок сохраняются вне зависимости от того, удалось ли сопоставить строку.
+  - `_process_document` распилен на `_build_document` (создаёт объект Document) + `_add_document` (делает dedup) — чтобы получить ссылку на созданный документ для записи в snapshot row.
+- **Backfill-скрипт** `backend/scripts/backfill_debt_snapshot.py`: для существующего `ImportRun` парсит исходный файл и создаёт `DebtSnapshot` ретроспективно. Используется одноразово для последнего импорта (1a9b0b7a от 26.05) — обычные импорты после деплоя пишут snapshot автоматически.
+
+**Сохраняемые поля в snapshot row** (раньше терялись):
+- `advance_start` / `advance_end` (аванс клиентов — ~6.9 млн ₽ в текущем файле, нигде не учитывался);
+- `prepay_in` / `prepay_used` (поступление и зачёт предоплаты — важно для «Корректировок»);
+- `raw_name` для каждой строки (полный текст из 1С — для UI);
+- `row_index` (порядок в файле — для отображения «как в Excel»);
+- `parent_row_id` (иерархия для TreeTable UI).
+
+**Тесты** (`backend/tests/test_debt_snapshot.py`, 6 новых):
+- snapshot создаётся при `process_import` и привязан к ImportRun (1-к-1);
+- агрегаты `total_debt_start/end/sold/advance_end/prepay_in` посчитаны корректно;
+- 7 строк (2 buyer + 2 contract + 3 document) с правильной иерархией parent→child;
+- ЮЛ-строки имеют `organization_id`, ФЛ-строки — `None`;
+- Корректировка несёт `prepay_in/used`;
+- Buyer-строка несёт `advance_end` (раньше терялся).
+
+**Результаты прогона:** 241 passed, 9 skipped, 0 failed. Backwards-совместимость 100% (235 + 6 новых = 241).
+
+**Следующий шаг:** деплой миграции на production + backfill DebtSnapshot для последнего ImportRun `1a9b0b7a`. Затем этап 3 — UI «1С-вид» в разделе «Должники» (TreeTable + сверка по импортам).
+
 ### 2026-05-26 — Этап 1 фикса парсера задолженности: 188 → 0 ошибок
 
 **Контекст:** CEO запросил новое представление «как в файле 1С» в разделе «Должники» для сверки импорта. При исследовании файла `Задолженность покупателей за 01.01.2025 - 24.05.2026.xls` обнаружили, что текущий парсер `debt_report.py` падает с **188 ошибками** на 6058 строках — теряются документы и контракты. Принят 5-этапный план реализации; это запись по этапу 1 (фикс парсера, без нового UI).

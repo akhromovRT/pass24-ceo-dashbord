@@ -7,6 +7,7 @@ from sqlmodel import Session, select
 from app.models import (
     Alert, AlertSeverity, AlertType,
     Contract, ContractStatus, ContractType,
+    DebtSnapshot, DebtSnapshotLevel, DebtSnapshotRow,
     Document, DocType,
     ImportRun, ImportStatus,
     Organization, OrgStatus,
@@ -121,20 +122,30 @@ class ImportService:
         documents_count = 0
         skipped_no_inn = 0
 
+        # Сопоставление parsed-объект → созданная сущность БД. Нужно для
+        # последующего построения DebtSnapshotRow с правильными FK.
+        buyer_to_org: dict[int, Organization] = {}
+        contract_to_db: dict[int, Contract] = {}
+        document_to_db: dict[int, Document] = {}
+
         for buyer in parse_result.buyers:
-            # Физлица без ИНН в колонке B файла 1С — пропускаем на этом этапе.
-            # Они будут полноценно сохраняться в DebtSnapshot (этап 2 фикса);
-            # пока в Organization их нельзя положить, т.к. inn — уникальный.
+            # Физлица без ИНН в колонке B файла 1С — в Organization пока
+            # не пишем (inn — уникальный), но в DebtSnapshot строка сохранится
+            # (organization_id будет NULL). Так данные не теряются.
             if not buyer.inn:
                 skipped_no_inn += 1
                 continue
             org = self._process_buyer(buyer, import_run)
+            buyer_to_org[id(buyer)] = org
             for parsed_contract in buyer.contracts:
                 contract = self._process_contract(parsed_contract, org, import_run)
+                contract_to_db[id(parsed_contract)] = contract
                 contracts_count += 1
                 for parsed_doc in parsed_contract.documents:
-                    if self._process_document(parsed_doc, contract, org, import_run):
+                    doc = self._build_document(parsed_doc, contract, org, import_run)
+                    if self._add_document(doc):
                         documents_count += 1
+                        document_to_db[id(parsed_doc)] = doc
 
         import_run.buyers_count = len(parse_result.buyers)
         import_run.contracts_count = contracts_count
@@ -148,9 +159,161 @@ class ImportService:
         import_run.status = ImportStatus.COMPLETED
         import_run.completed_at = datetime.now(UTC)
 
+        # Полный срез 1С → DebtSnapshot + DebtSnapshotRow (этап 2).
+        # Делаем ДО commit, чтобы всё легло в одной транзакции.
+        self._build_debt_snapshot(
+            parse_result, import_run,
+            buyer_to_org, contract_to_db, document_to_db,
+            skipped_no_inn=skipped_no_inn,
+        )
+
         self.session.add(import_run)
         self.session.commit()
         return import_run
+
+    def _build_document(
+        self,
+        parsed: ParsedDocument,
+        contract: Contract,
+        org: Organization,
+        import_run: ImportRun,
+    ) -> Document:
+        """Создаёт Document без вызова _add_document (тот делает dedup)."""
+        doc_type = _DOC_TYPE_MAP.get(parsed.doc_type, DocType.SALE)
+        amount = parsed.amount or parsed.sold or parsed.paid or 0
+        return Document(
+            contract_id=contract.id,
+            organization_id=org.id,
+            doc_type=doc_type,
+            doc_number=parsed.doc_number,
+            doc_date=parsed.doc_date,
+            amount=amount,
+            import_run_id=import_run.id,
+            raw_name=parsed.raw_name,
+        )
+
+    def _build_debt_snapshot(
+        self,
+        parse_result: ParseResult,
+        import_run: ImportRun,
+        buyer_to_org: dict,
+        contract_to_db: dict,
+        document_to_db: dict,
+        skipped_no_inn: int,
+    ) -> DebtSnapshot:
+        """Сохраняет полный срез файла «Задолженность» в debt_snapshots/_rows.
+
+        Все 8 числовых колонок сохраняются вне зависимости от того, удалось ли
+        связать строку с Organization/Contract/Document. Физлица без ИНН тоже
+        попадают в snapshot (organization_id остаётся NULL).
+        """
+        from decimal import Decimal
+
+        def _sum(field: str) -> Decimal:
+            total = Decimal(0)
+            for b in parse_result.buyers:
+                v = getattr(b, field, None)
+                if v is not None:
+                    total += v
+            return total
+
+        snapshot = DebtSnapshot(
+            import_run_id=import_run.id,
+            filename=parse_result.filename,
+            period_start=parse_result.period_start,
+            period_end=parse_result.period_end,
+            total_debt_start=_sum("debt_start") or None,
+            total_advance_start=_sum("advance_start") or None,
+            total_sold=_sum("sold") or None,
+            total_paid=_sum("paid") or None,
+            total_prepay_in=_sum("prepay_in") or None,
+            total_prepay_used=_sum("prepay_used") or None,
+            total_debt_end=_sum("debt_end") or None,
+            total_advance_end=_sum("advance_end") or None,
+            buyers_count=parse_result.buyers_count,
+            contracts_count=parse_result.contracts_count,
+            documents_count=parse_result.documents_count,
+            buyers_no_inn_count=skipped_no_inn,
+        )
+        self.session.add(snapshot)
+        self.session.flush()
+
+        row_index = 0
+        for buyer in parse_result.buyers:
+            org = buyer_to_org.get(id(buyer))
+            buyer_row = DebtSnapshotRow(
+                snapshot_id=snapshot.id,
+                parent_row_id=None,
+                level=DebtSnapshotLevel.BUYER,
+                row_index=row_index,
+                raw_name=buyer.name,
+                raw_inn=buyer.inn or None,
+                debt_start=buyer.debt_start,
+                advance_start=buyer.advance_start,
+                sold=buyer.sold,
+                paid=buyer.paid,
+                prepay_in=buyer.prepay_in,
+                prepay_used=buyer.prepay_used,
+                debt_end=buyer.debt_end,
+                advance_end=buyer.advance_end,
+                organization_id=org.id if org else None,
+            )
+            self.session.add(buyer_row)
+            self.session.flush()
+            row_index += 1
+
+            for parsed_contract in buyer.contracts:
+                contract_db = contract_to_db.get(id(parsed_contract))
+                contract_row = DebtSnapshotRow(
+                    snapshot_id=snapshot.id,
+                    parent_row_id=buyer_row.id,
+                    level=DebtSnapshotLevel.CONTRACT,
+                    row_index=row_index,
+                    raw_name=parsed_contract.raw_name,
+                    contract_number=parsed_contract.contract_number,
+                    contract_date=parsed_contract.contract_date,
+                    debt_start=parsed_contract.debt_start,
+                    advance_start=parsed_contract.advance_start,
+                    sold=parsed_contract.sold,
+                    paid=parsed_contract.paid,
+                    prepay_in=parsed_contract.prepay_in,
+                    prepay_used=parsed_contract.prepay_used,
+                    debt_end=parsed_contract.debt_end,
+                    advance_end=parsed_contract.advance_end,
+                    organization_id=org.id if org else None,
+                    contract_id=contract_db.id if contract_db else None,
+                )
+                self.session.add(contract_row)
+                self.session.flush()
+                row_index += 1
+
+                for parsed_doc in parsed_contract.documents:
+                    doc_db = document_to_db.get(id(parsed_doc))
+                    doc_row = DebtSnapshotRow(
+                        snapshot_id=snapshot.id,
+                        parent_row_id=contract_row.id,
+                        level=DebtSnapshotLevel.DOCUMENT,
+                        row_index=row_index,
+                        raw_name=parsed_doc.raw_name,
+                        doc_type=parsed_doc.doc_type,
+                        doc_number=parsed_doc.doc_number,
+                        doc_date=parsed_doc.doc_date,
+                        debt_start=parsed_doc.debt_start,
+                        advance_start=parsed_doc.advance_start,
+                        sold=parsed_doc.sold,
+                        paid=parsed_doc.paid,
+                        prepay_in=parsed_doc.prepay_in,
+                        prepay_used=parsed_doc.prepay_used,
+                        debt_end=parsed_doc.debt_end,
+                        advance_end=parsed_doc.advance_end,
+                        organization_id=org.id if org else None,
+                        contract_id=contract_db.id if contract_db else None,
+                        document_id=doc_db.id if doc_db else None,
+                    )
+                    self.session.add(doc_row)
+                    row_index += 1
+
+        return snapshot
 
     def _process_buyer(self, buyer: ParsedBuyer, import_run: ImportRun) -> Organization:
         normalized_inn = _normalize_inn(buyer.inn)
@@ -210,28 +373,6 @@ class ImportService:
         self.session.add(contract)
         self.session.flush()
         return contract
-
-    def _process_document(
-        self,
-        parsed: ParsedDocument,
-        contract: Contract,
-        org: Organization,
-        import_run: ImportRun,
-    ) -> bool:
-        doc_type = _DOC_TYPE_MAP.get(parsed.doc_type, DocType.SALE)
-        amount = parsed.amount or parsed.sold or parsed.paid or 0
-
-        doc = Document(
-            contract_id=contract.id,
-            organization_id=org.id,
-            doc_type=doc_type,
-            doc_number=parsed.doc_number,
-            doc_date=parsed.doc_date,
-            amount=amount,
-            import_run_id=import_run.id,
-            raw_name=parsed.raw_name,
-        )
-        return self._add_document(doc)
 
     # ---- Bank statement import ----
 
