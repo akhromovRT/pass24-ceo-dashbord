@@ -11,6 +11,13 @@ class DocType(str, enum.Enum):
     PAYMENT = "payment"
     PREPAY_IN = "prepay_in"
     PREPAY_USED = "prepay_used"
+    # Корректировки долга / реализации / возвраты / списания — раньше
+    # маппились в SALE с raw_name="Корректировка...", что мешало
+    # фильтру «только продажи» в отчётах. Добавлены отдельные значения,
+    # парсер их выставляет напрямую (см. _DOC_TYPE_MAP).
+    CORRECTION = "correction"
+    WRITEOFF = "writeoff"
+    REFUND = "refund"
 
 
 class Document(SQLModel, table=True):

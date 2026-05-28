@@ -1,6 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.core.config import settings
+
 from app.api.v1.alerts import router as alerts_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.billing import router as billing_router
@@ -15,7 +17,16 @@ from app.api.v1.registry import router as registry_router
 from app.api.v1.reports import router as reports_router
 from app.api.v1.users import router as users_router
 
-app = FastAPI(title="CEO24", version="0.1.0")
+# /docs и /openapi.json открыты только если DEBUG=true в .env.
+# В production эти эндпоинты прячутся — это снижает поверхность атаки,
+# не показывая схему API ботам/сканерам (см. ADR-021 / backlog «Закрыть /docs»).
+app = FastAPI(
+    title="CEO24",
+    version="0.1.0",
+    docs_url="/docs" if settings.DEBUG else None,
+    redoc_url="/redoc" if settings.DEBUG else None,
+    openapi_url="/openapi.json" if settings.DEBUG else None,
+)
 
 app.add_middleware(
     CORSMiddleware,

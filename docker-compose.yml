@@ -31,6 +31,12 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    # Лимит памяти для backend: при одновременных тяжёлых импортах +
+    # node-build в соседнем контейнере backend получал OOM на VPS 2 GB.
+    # 700 MB — потолок для безопасной работы рядом с pg/nginx/node.
+    # При тяжёлой нагрузке (P3.5 расширенный импорт аналитики) — поднять.
+    mem_limit: 700m
+    mem_reservation: 300m
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health',timeout=3).status==200 else 1)"]
       interval: 30s
@@ -56,8 +62,11 @@ services:
       - /srv/ceo24/certbot/conf:/etc/letsencrypt:ro
       - /srv/ceo24/certbot/www:/var/www/certbot:ro
     healthcheck:
-      # 127.0.0.1, не localhost: localhost резолвится в IPv6 ::1, nginx слушает только IPv4
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
+      # wget без --spider в nginx:alpine читает body в /dev/null, что иногда
+      # помечает контейнер unhealthy несмотря на 200. --spider только проверяет
+      # код ответа; 127.0.0.1 — потому что localhost резолвится в IPv6 ::1,
+      # nginx слушает только IPv4.
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1/healthz"]
       interval: 30s
       timeout: 5s
       retries: 3

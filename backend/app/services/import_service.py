@@ -24,6 +24,9 @@ _CLEAN_SUFFIXES = re.compile(
 _DOC_TYPE_MAP = {
     "sale": DocType.SALE,
     "payment": DocType.PAYMENT,
+    "correction": DocType.CORRECTION,
+    "writeoff": DocType.WRITEOFF,
+    "refund": DocType.REFUND,
 }
 
 _BANK_SYNTH_CONTRACT_NUMBER = "BANK-IMPORT"
@@ -99,6 +102,29 @@ class ImportService:
         self.session.add(doc)
         keys.add(key)
         return True
+
+    def _payment_exists_in_payments_report(
+        self, organization_id, doc_date, amount,
+    ) -> bool:
+        """True если в documents уже есть PAYMENT с теми же (org, date, amount)
+        через synthetic-contract `1C-PAYMENTS` (реестр 1С). Защита от
+        cross-source дублей при импорте банк-выписки (ADR-018)."""
+        from sqlmodel import select
+        from app.models import Contract
+
+        stmt = (
+            select(Document.id)
+            .join(Contract, Contract.id == Document.contract_id)
+            .where(
+                Document.organization_id == organization_id,
+                Document.doc_type == DocType.PAYMENT,
+                Document.doc_date == doc_date,
+                Document.amount == amount,
+                Contract.contract_number == _PAYMENTS_SYNTH_CONTRACT_NUMBER,
+            )
+            .limit(1)
+        )
+        return self.session.exec(stmt).first() is not None
 
     # ---- Debt-report import ----
 
@@ -466,6 +492,16 @@ class ImportService:
             if contract.id not in seen_contracts:
                 seen_contracts.add(contract.id)
                 contracts_count += 1
+
+            # Cross-source dedup (ADR-018, профилактика): не создавать
+            # bank-документ, если в documents уже есть платёж из реестра 1С
+            # (payments.xls / 1C-PAYMENTS) с теми же (org, date, amount).
+            # Реестр 1С — source of truth, банк — копия.
+            if self._payment_exists_in_payments_report(
+                org.id, p.date, p.amount
+            ):
+                self._skipped_dup_documents += 1
+                continue
 
             doc = Document(
                 contract_id=contract.id,

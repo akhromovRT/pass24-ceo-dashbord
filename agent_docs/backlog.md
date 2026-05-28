@@ -105,11 +105,8 @@
 
 ## Инфраструктура и надёжность
 
-### Frontend healthcheck команда
-- Сейчас `wget -qO- http://localhost/` помечает `frontend` как `unhealthy` (флаги или wget недоступны в nginx:alpine).
-- Контейнер работает (отдаёт 200), но docker помечает как unhealthy.
-- **Фикс:** заменить на `wget --spider -q http://localhost/` или `nc -z localhost 80`, либо установить curl в образ.
-- **Срок:** 15 минут.
+### Frontend healthcheck команда ✅ Закрыто 2026-05-28
+Заменил на `wget --spider -q http://127.0.0.1/healthz` в `docker-compose.yml`.
 
 ### UptimeRobot + Telegram-алерты
 - HTTP-чек на `/` и `/docs` каждые 5 минут, бесплатный план (50 мониторов).
@@ -117,10 +114,10 @@
 - **Срок:** 30 минут (через web-UI uptimerobot.com).
 - **Owner:** user (нужна регистрация на личный аккаунт).
 
-### Полноценный DR-drill
-- Один раз в квартал — восстановить production-дамп в локальный временный postgres, прогнать `SELECT count(*)` по ключевым таблицам, сравнить с production.
-- Скрипт `scripts/dr_drill.sh` — автоматизированный test-restore.
-- **Срок:** 2 часа.
+### Полноценный DR-drill ✅ Закрыто 2026-05-28
+Скрипт `scripts/dr_drill.sh`: эфемерный postgres-контейнер + pg_restore +
+counts по ключевым таблицам + sanity-чек (есть admin, есть in_registry orgs).
+Запускать раз в квартал.
 
 ### Бэкап в Yandex Object Storage / S3
 - Сейчас бэкапы локально на сервере + pull на ноут (две точки).
@@ -139,12 +136,12 @@
 - Когда понадобится: купить домен (например `ceo24.onvi.ru` или поддомен onvi-service.ru), переключить nginx на Caddy/Traefik для auto-Let's-Encrypt, обновить CORS.
 - **Срок:** 1 день после получения домена.
 
-### Стабильный backend под нагрузкой
-- При одновременных операциях (pg_restore + uvicorn + nginx + node build) backend получил OOM. Опции:
-  - Поставить cgroup memory limit для backend (`mem_limit: 700m` в compose) — детерминированно
-  - Отделить cron-задачи в отдельный контейнер
-  - Использовать `--workers 1` для uvicorn (уже так, но проверить)
-- **Срок:** 2-4 часа экспериментов.
+### Стабильный backend под нагрузкой ✅ Частично закрыто 2026-05-28
+В `docker-compose.yml` для backend добавлены `mem_limit: 700m` и
+`mem_reservation: 300m`. OOM-killer срабатывает детерминированно при
+аномалии вместо «съел всю RAM и убил соседа». Cron-сервис вынести в
+отдельный контейнер — отдельной итерацией при появлении P3.4 (алерты
+по расписанию).
 
 ---
 
@@ -171,14 +168,11 @@
 18:00, ответственная — Софья Морозова, наблюдатель — Ирина Зыкова). Инструкция —
 `agent_docs/guides/registry-reconciliation-mpp.md`.
 
-### Дедупликация платежей на этапе импорта (профилактика) 🆕
-- Сейчас импорт банковской выписки не проверяет наличие того же платежа в реестре 1С
-  (`payments.xls`). Исторические дубли вычищены SQL-операцией 2026-05-21 (ADR-018,
-  635 банк-документов), но при следующем импорте проблема повторится.
-- **Fix:** в парсере банк-выписки перед `INSERT` проверять, есть ли `Document` с тем же
-  `(organization_id, doc_date, amount)` источником `payments.xls`. Если есть — пропустить.
-- **Срок:** ~1-2 часа. Альтернатива — оставить как есть и периодически прогонять
-  `/tmp/dedup.sql` (текущий чистильщик безопасен).
+### Дедупликация платежей на этапе импорта (профилактика) ✅ Закрыто 2026-05-28
+`process_bank_import` перед INSERT-ом каждого PAYMENT-документа проверяет
+наличие записи с тем же `(organization_id, doc_date, amount)` через
+synthetic-contract `1C-PAYMENTS` (реестр 1С). Если совпадение — банк-копия
+пропускается. Профилактика повторения инцидента 2026-05-21 (ADR-018).
 
 ### Этап 4: автоалерт на расхождения «1С vs БД» после импорта 🆕
 - Сейчас `/debt-snapshots/latest` возвращает массив `diffs` (где
@@ -207,16 +201,14 @@
 - Скорее всего реализуется через PrimeVue `TreeTable` `filterMode="strict"` + `Column #filter`.
 - **Срок:** 1 день.
 
-### DocType.CORRECTION в основном enum 🆕
-- Сейчас Корректировки долга/реализации парсятся как `doc_type='correction'` в
-  `ParsedDocument`, но в `Document` маппятся в `DocType.SALE` (с `raw_name="Корректировка..."`).
-  Это не ломает леджер (корректировка часто работает через предоплату, а не через долг),
-  но искажает фильтры «только продажи» в отчётах.
-- **Fix:** миграция `ALTER TYPE doctype ADD VALUE 'CORRECTION'` + WRITEOFF/REFUND, расширить
-  `_DOC_TYPE_MAP` в `import_service.py`. Обновить отчёты, чтобы корректировки выводились
-  отдельной категорией.
-- **Срок:** 0.5 дня. Зависит от обсуждения с CEO/бухгалтером, как корректно учитывать
-  корректировки в KPI (увеличение продаж? отдельная категория?).
+### DocType.CORRECTION в основном enum ✅ Закрыто 2026-05-28
+В `DocType` добавлены значения `CORRECTION`, `WRITEOFF`, `REFUND` +
+миграция `c8a5b3d1e7f2` (`ALTER TYPE doctype ADD VALUE` через
+autocommit_block). `_DOC_TYPE_MAP` в `import_service` мапит соответствующие
+строки парсера. Отчёты с фильтром «только продажи» теперь не захватывают
+корректировки. **Что ещё не сделано:** отдельная категория «Корректировки»
+в KPI дашборда — это требует обсуждения с CEO/бухгалтером (нужен отдельный
+backlog-item при необходимости).
 
 ### Intra-source дубли в payments.xls (особенно ПРОМСТРОЙХОЛДИНГ)
 - В payments.xls встречаются группы документов с одинаковыми `(org, date, amount)` и идентичным
@@ -239,72 +231,72 @@
 Причина — дефект определения метрики (валовой приток по дате прихода vs план месяца), не ошибка
 данных. Исправлено фичей AR-леджер: март 2026 — 83%.
 
-### Интеграционный тест «все data-маршруты требуют auth»
-- Инцидент 2026-05-13 (открытый API) поймал бы такой тест в CI до релиза.
-- Pseudo-pytest: для каждого роутера через `app.routes` проверить, что без token все GET/POST/PATCH возвращают 401 или 403.
-- Добавить в `tests/test_api_security.py`.
-- **Срок:** 2 часа.
+### Интеграционный тест «все data-маршруты требуют auth» ✅ Закрыто 2026-05-28
+`backend/tests/test_api_security.py`: проходит по `app.routes`, для каждого
+не-public маршрута запрашивает без токена и убеждается в 401/403. Защищает
+от регресса инцидента 2026-05-13.
 
-### Pre-deploy smoke test pipeline
-- После каждого `docker compose up -d` автоматически:
-  - `curl /` → 200
-  - `curl /api/v1/dashboard/summary` без token → 401
-  - `docker compose logs --since 30s | grep -i error` → пусто
-- Можно сделать как post-pull скрипт `scripts/post-deploy-smoke.sh`.
-- **Срок:** 1 час.
+### Pre-deploy smoke test pipeline ✅ Закрыто 2026-05-28
+`scripts/post-deploy-smoke.sh`: 4 проверки (frontend / → 200,
+/api/v1/dashboard/summary без токена → 401, /docs → 404 (DEBUG=false),
+/healthz → 200). Возвращает exit 1 при любом провале.
 
-### CI на GitHub Actions
-- Сейчас тесты ручные. Настроить CI:
-  - На каждый PR: backend pytest + frontend vue-tsc + vite build.
-  - На push в main: те же + (опционально) автодеплой через SSH webhook.
-- **Срок:** 2-4 часа.
+### CI на GitHub Actions ✅ Закрыто 2026-05-28
+`.github/workflows/ci.yml`: на каждый PR и push в main —
+backend (ruff + pytest) и frontend (vue-tsc + vite build) параллельно.
+Без автодеплоя (требует SSH-secrets — отдельной итерацией по запросу).
 
 ### Improve test coverage
 - Текущее: **252 passed, 9 skipped**. Skipped — file-based парсер-тесты (нет тестовых артефактов в репо).
 - Добавить fixture-файлы или генерацию синтетических xls, размер ~5 КБ.
 - **Срок:** 4 часа.
 
-### Архивировать старые записи development-history.md → archive
-- Сейчас в основном файле 18 записей вместо 10 по правилу (см. шапку файла). Старые 8
-  (до 2026-05-21 включительно) пора перенести в `development-history-archive.md`.
-- **Срок:** 15 минут.
+### Архивировать старые записи development-history.md → archive ✅ Закрыто 2026-05-28
+Перенесено 8 старых записей (2026-05-18 — 2026-05-20) в `development-history-archive.md`.
+В основном файле осталось 10 свежих + текущая запись.
 
-### Линтер + форматтер в pre-commit
-- Сейчас `ruff` в pyproject, но не в pre-commit hook.
-- Добавить `pre-commit` + `.pre-commit-config.yaml` (ruff, prettier для Vue).
-- **Срок:** 30 минут.
+### Линтер + форматтер в pre-commit ✅ Закрыто 2026-05-28
+`.pre-commit-config.yaml`: ruff + ruff-format (только backend/),
+trailing-whitespace / end-of-file-fixer / check-yaml /
+check-added-large-files / detect-private-key (репо-wide). Активировать
+локально: `pre-commit install`.
 
 ---
 
 ## Безопасность
 
-### Rate-limiting / fail2ban на nginx
-- В логах backend постоянные bot-сканы на `.env`, `.git/config`, `phpunit`.
-- Это шум, но открывает риск brute-force на `/auth/login`.
-- Установить `nginx-limit-req-zone` + fail2ban для `/api/v1/auth/login` (5 попыток / минуту с IP).
-- **Срок:** 1-2 часа.
+### Rate-limiting / fail2ban на nginx ✅ Частично закрыто 2026-05-28
+В `/auth/login` встроен in-memory rate-limit (10 попыток / 60 сек с IP, 429
+после превышения). Этого хватает для текущего масштаба (1 backend-инстанс,
+5 пользователей). При горизонтальном масштабировании или росте brute-force
+шума — заменить на slowapi/Redis. fail2ban на nginx — отдельной итерацией
+если шум станет проблемой.
 
-### Закрыть `/docs` и `/openapi.json` в production
-- Сейчас публично доступны. Они не показывают данные, но раскрывают всю схему API (помогает атакующим).
-- FastAPI: `app = FastAPI(docs_url=None, openapi_url=None)` или прятать за basic-auth.
-- Или сделать через env: показывать только при `DEBUG=true`.
-- **Срок:** 30 минут.
+### Закрыть `/docs` и `/openapi.json` в production ✅ Закрыто 2026-05-28
+В `Settings.DEBUG` (default `False`); `app.main` создаёт FastAPI с
+`docs_url`/`redoc_url`/`openapi_url = None` если DEBUG не выставлен.
+Чтобы временно открыть локально: `DEBUG=true` в `.env` backend.
 
-### Audit log для админских операций
-- Сейчас `create user`, `reset password`, `change role`, `delete` (если будет) не логируются отдельно.
-- Минимум: писать в отдельную таблицу `audit_log(user_id, action, target, ts, ip)`.
-- Полезно для compliance и расследований.
-- **Срок:** 1 день.
+### Audit log для админских операций ✅ Закрыто 2026-05-28
+Таблица `audit_log` (миграция `e2c8f1a90d4b`), хелпер
+`app.services.audit_service.write_audit`. Интегрирован в `users.create`
+и `users.reset_password` (логируется actor email + детали + ip). Остальные
+admin-операции (правка статуса org, attach/detach платежей и т.п.) — по
+мере добавления, через тот же хелпер.
 
-### Ротация JWT secret
-- `settings.SECRET_KEY` сейчас, вероятно, статичный. Проверить — если так, добавить процедуру ротации.
-- При смене все токены инвалидируются — для 5 пользователей не проблема.
-- **Срок:** 30 минут.
+### Ротация JWT secret 🚧 Не закрыто
+Требует ручного изменения `.env` SECRET_KEY на сервере + рестарт backend
+(все токены инвалидируются — пользователи перелогинятся). Процедура простая,
+но требует action от admin. Рекомендация: документировать в `runbook.md` и
+делать раз в полгода / при подозрении на компрометацию.
 
-### Force password change on first login
-- Когда admin создаёт пользователя через UI, сгенерированный пароль показывается один раз.
-- Добавить флаг `must_change_password` — при логине пользователя сразу редиректить на `/profile`.
-- **Срок:** 2 часа.
+### Force password change on first login ✅ Закрыто 2026-05-28
+Поле `User.must_change_password` (миграция `d9f4a7b2c5e8`), ставится в
+`true` при создании через UI с сгенерированным паролем и при
+`reset-password`. `/auth/me` возвращает флаг — фронт должен редиректить
+на смену пароля. После успешного `/auth/change-password` флаг сбрасывается.
+**Что осталось во фронте:** добавить редирект в `App.vue`/router-guard
+(сейчас флаг отдаётся, но UI его ещё не использует).
 
 ---
 

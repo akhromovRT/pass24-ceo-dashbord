@@ -1,4 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+import time
+from collections import defaultdict, deque
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 from pydantic import BaseModel, Field
@@ -11,6 +14,26 @@ from app.models import User, UserRole
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
+
+# Простой in-memory rate-limit на /auth/login: не больше N попыток с
+# одного IP за окно T секунд. Хватает для 5 пользователей и одного
+# backend-инстанса; если масштабируемся — заменить на slowapi/Redis.
+_LOGIN_WINDOW_SECONDS = 60
+_LOGIN_MAX_ATTEMPTS = 10
+_login_attempts: dict[str, deque] = defaultdict(deque)
+
+
+def _check_login_rate_limit(ip: str) -> None:
+    now = time.monotonic()
+    bucket = _login_attempts[ip]
+    while bucket and now - bucket[0] > _LOGIN_WINDOW_SECONDS:
+        bucket.popleft()
+    if len(bucket) >= _LOGIN_MAX_ATTEMPTS:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many login attempts, retry later",
+        )
+    bucket.append(now)
 
 
 def get_current_user(
@@ -52,9 +75,12 @@ class ChangePasswordRequest(BaseModel):
 
 @router.post("/login")
 def login(
+    request: Request,
     form_data: OAuth2PasswordRequestForm = Depends(),
     session: Session = Depends(get_session),
 ):
+    ip = request.client.host if request.client else "unknown"
+    _check_login_rate_limit(ip)
     user = session.exec(
         select(User).where(User.email == form_data.username)
     ).first()
@@ -74,6 +100,9 @@ def me(current_user: User = Depends(get_current_user)):
         "name": current_user.name,
         "email": current_user.email,
         "role": current_user.role,
+        # Фронт смотрит этот флаг и редиректит на /profile до смены пароля,
+        # если admin создал пользователя через UI (сгенерированный пароль).
+        "must_change_password": current_user.must_change_password,
     }
 
 
@@ -94,6 +123,9 @@ def change_password(
             detail="New password must differ from current",
         )
     current_user.hashed_password = get_password_hash(body.new_password)
+    # Сбрасываем флаг — пользователь только что сменил пароль, можно
+    # пускать в обычные экраны.
+    current_user.must_change_password = False
     session.add(current_user)
     session.commit()
     return {"status": "ok"}
