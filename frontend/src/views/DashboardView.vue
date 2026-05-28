@@ -263,9 +263,11 @@ function onAgingClick(event: any) {
           :to="compositionLink('collected_current', summary.current_month_label)"
         />
         <KpiTile
-          label="Долг"
-          :value="fmtRub(summary.total_debt)"
-          :sub="`90+: ${fmtRub(summary.debt_90plus_amount)} (${summary.debt_90plus_share}%)`"
+          label="Долг активных"
+          :value="fmtRub(summary.total_debt_active ?? summary.total_debt)"
+          :sub="summary.total_debt_writeoff
+            ? `к списанию: ${fmtRub(summary.total_debt_writeoff)} · 90+: ${fmtRub(summary.debt_90plus_amount)} (${summary.debt_90plus_share}%)`
+            : `90+: ${fmtRub(summary.debt_90plus_amount)} (${summary.debt_90plus_share}%)`"
           :hint="HINTS.debt"
           accent="danger"
         />

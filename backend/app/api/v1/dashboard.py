@@ -64,6 +64,21 @@ def dashboard_summary(session: Session = Depends(get_session)):
         select(func.coalesce(func.sum(Organization.total_debt), 0)).where(_excl())
     ).one())
 
+    # Долг по группам статусов (P3.0.3, вариант Б): «к взысканию» = ACTIVE+SUSPENDED,
+    # «к списанию» = CHURNED+TRANSIT. PROSPECT исключаем — это шум.
+    total_debt_active = _f(session.exec(
+        select(func.coalesce(func.sum(Organization.total_debt), 0))
+        .where(_excl(), Organization.status.in_(  # type: ignore[union-attr]
+            [OrgStatus.ACTIVE, OrgStatus.SUSPENDED]
+        ))
+    ).one())
+    total_debt_writeoff = _f(session.exec(
+        select(func.coalesce(func.sum(Organization.total_debt), 0))
+        .where(_excl(), Organization.status.in_(  # type: ignore[union-attr]
+            [OrgStatus.CHURNED, OrgStatus.TRANSIT]
+        ))
+    ).one())
+
     active_clients = session.exec(
         select(func.count()).select_from(Organization)
         .where(_excl(), Organization.status == OrgStatus.ACTIVE)
@@ -177,6 +192,8 @@ def dashboard_summary(session: Session = Depends(get_session)):
         "mrr_plan": plan_mrr,
         "arr_plan": plan_mrr * 12,
         "total_debt": total_debt,
+        "total_debt_active": total_debt_active,
+        "total_debt_writeoff": total_debt_writeoff,
         "active_clients": active_clients,
         "open_alerts": open_alerts,
         "new_30d": new_30d,

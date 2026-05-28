@@ -1,11 +1,14 @@
 """Сборка управленческих отчётов по долгу и собираемости.
 
-Два пресета:
+Три пресета:
 - `debtors` — реестр должников: кого взыскивать, с приоритетом взыскания.
 - `discipline` — дисциплина платежей: кто соскальзывает в долг.
+- `payments` — реестр платежей за период (Софья 2026-05-28): дата платежа,
+  контрагент, ИНН, сумма, назначение. Фильтры по диапазону дат и контрагентам.
 
 Метрики собираемости берутся из AR-леджера (monthly_charges + payment_allocations),
 а не из валовых сумм платежей — так же, как в dashboard.py."""
+import uuid
 from datetime import date
 from io import BytesIO
 
@@ -51,6 +54,11 @@ class ReportCriteria(BaseModel):
     # только для пресета composition; остальные пресеты игнорируют через extra="ignore"
     metric: str | None = None
     period: str | None = None
+    # P3.0.4 (Софья, 2026-05-28): точный диапазон дат и фильтр по контрагентам.
+    # Используется в пресете payments; в остальных — игнорируется через extra="ignore".
+    date_from: date | None = None
+    date_to: date | None = None
+    organization_ids: list[uuid.UUID] = []
 
 
 # --- каталоги колонок -------------------------------------------------------
@@ -88,10 +96,21 @@ DISCIPLINE_COLUMNS: list[tuple[str, str]] = [
     ("churn_month", "Месяц отключения"),
 ]
 
+PAYMENTS_COLUMNS: list[tuple[str, str]] = [
+    ("doc_date", "Дата платежа"),
+    ("org_name", "Контрагент"),
+    ("inn", "ИНН"),
+    ("amount", "Сумма, ₽"),
+    ("raw_name", "Назначение"),
+    ("allocated_periods", "Зачтено за"),
+    ("manager", "Менеджер"),
+]
+
 REPORTS: dict[str, dict] = {
     "debtors": {"title": "Реестр должников", "columns": DEBTORS_COLUMNS},
     "discipline": {"title": "Дисциплина платежей", "columns": DISCIPLINE_COLUMNS},
     "composition": {"title": "Состав показателя", "columns": []},
+    "payments": {"title": "Платежи", "columns": PAYMENTS_COLUMNS},
 }
 
 _RU_MONTHS = [
@@ -422,10 +441,82 @@ def build_discipline_report(session: Session, c: ReportCriteria) -> list[dict]:
 
 # --- диспетчер и экспорт ----------------------------------------------------
 
+def build_payments_report(session: Session, c: ReportCriteria) -> list[dict]:
+    """Реестр платежей за период с фильтрами по контрагентам и диапазону дат.
+
+    Каждая строка — один PAYMENT-документ. Колонка `allocated_periods`
+    показывает за какие месяцы зачтён платёж (по AR-леджеру), чтобы
+    Софье было видно «дата прихода → за какие периоды засчитан»."""
+    query = (
+        select(Document, Organization)
+        .join(Organization, Organization.id == Document.organization_id)
+        .where(Document.doc_type == DocType.PAYMENT)
+    )
+    if not c.include_excluded:
+        query = query.where(Organization.excluded_from_analytics == False)  # noqa: E712
+    if c.date_from:
+        query = query.where(Document.doc_date >= c.date_from)  # type: ignore[union-attr]
+    if c.date_to:
+        query = query.where(Document.doc_date <= c.date_to)  # type: ignore[union-attr]
+    if c.organization_ids:
+        query = query.where(Document.organization_id.in_(c.organization_ids))  # type: ignore[union-attr]
+    if c.statuses:
+        statuses = [OrgStatus(s) for s in c.statuses if s in {st.value for st in OrgStatus}]
+        if statuses:
+            query = query.where(Organization.status.in_(statuses))  # type: ignore[union-attr]
+    query = query.order_by(Document.doc_date.desc())  # type: ignore[union-attr]
+
+    pairs = list(session.exec(query).all())
+    if not pairs:
+        return []
+
+    # Подтягиваем аллокации одним запросом — для колонки «Зачтено за».
+    payment_ids = [d.id for d, _ in pairs]
+    alloc_rows = session.exec(
+        select(PaymentAllocation.payment_document_id,
+               MonthlyCharge.year, MonthlyCharge.month,
+               PaymentAllocation.allocated_amount)
+        .join(MonthlyCharge,
+              MonthlyCharge.id == PaymentAllocation.monthly_charge_id,
+              isouter=True)
+        .where(PaymentAllocation.payment_document_id.in_(payment_ids))  # type: ignore[union-attr]
+    ).all()
+    alloc_by_pay: dict[uuid.UUID, list[tuple[int, int, float]]] = {}
+    for pay_id, y, m, amt in alloc_rows:
+        if y is None or m is None:
+            continue
+        alloc_by_pay.setdefault(pay_id, []).append((y, m, float(amt)))
+
+    managers = _managers(session)
+
+    def _fmt_periods(items: list[tuple[int, int, float]]) -> str:
+        # «04.2026 (12 000 ₽) + 05.2026 (3 000 ₽)»
+        items.sort()
+        return " + ".join(
+            f"{m:02d}.{y} ({amt:,.0f} ₽)".replace(",", " ")
+            for y, m, amt in items
+        )
+
+    out: list[dict] = []
+    for doc, org in pairs:
+        periods = alloc_by_pay.get(doc.id, [])
+        out.append({
+            "doc_date": doc.doc_date.isoformat() if doc.doc_date else None,
+            "org_name": org.name_display or org.name_1c,
+            "inn": org.inn,
+            "amount": _f(doc.amount),
+            "raw_name": doc.raw_name or "",
+            "allocated_periods": _fmt_periods(periods) if periods else "не разнесено",
+            "manager": managers.get(org.manager_id, "") if org.manager_id else "",
+        })
+    return _sort_rows(out, c.sort_by, c.sort_dir, default_key="doc_date")
+
+
 _BUILDERS = {
     "debtors": build_debtors_report,
     "discipline": build_discipline_report,
     "composition": build_composition_report,
+    "payments": build_payments_report,
 }
 
 

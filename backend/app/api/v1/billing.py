@@ -5,7 +5,14 @@ from sqlmodel import Session, func, select
 
 from app.api.v1.auth import get_current_user
 from app.core.database import get_session
-from app.models import ClientObject, DocType, Document, Organization
+from app.models import ClientObject, DocType, Document, Organization, OrgStatus
+
+# Статусы клиента, чьи долги считаются «к взысканию» (активные/приостановленные).
+# Все остальные (CHURNED/TRANSIT/PROSPECT) — «к списанию» или вообще не наши.
+# Решение CEO от 2026-05-28: показывать две плитки — «Долг активных» (главная) и
+# «К списанию» (CHURNED+TRANSIT), см. P3.0.3.
+_ACTIVE_DEBT_STATUSES = {OrgStatus.ACTIVE, OrgStatus.SUSPENDED}
+_WRITEOFF_DEBT_STATUSES = {OrgStatus.CHURNED, OrgStatus.TRANSIT}
 from app.services.aging import aging_index
 
 router = APIRouter(
@@ -115,10 +122,26 @@ def segments(session: Session = Depends(get_session)):
         if float(o.total_debt or 0) > 0:
             debtors += 1
 
+    # Долг по группам статусов (P3.0.3, вариант Б):
+    # _segments фильтрует только in_registry=True — этого достаточно,
+    # потому что Транзит с in_registry=False и так не попадает.
+    # CHURNED оставляем в выборке (in_registry=True), но выделяем
+    # отдельной плиткой «К списанию».
+    debt_active = sum(
+        float(o.total_debt or 0) for o in orgs if o.status in _ACTIVE_DEBT_STATUSES
+    )
+    debt_writeoff = sum(
+        float(o.total_debt or 0) for o in orgs if o.status in _WRITEOFF_DEBT_STATUSES
+    )
+    debt_all = sum(float(o.total_debt or 0) for o in orgs)
+
     return {
         "total": total, "mrr_plan": round(mrr_plan, 2),
         "paying": paying, "partial": partial,
         "not_paying": not_paying, "debtors": debtors,
         "objects_total": objects_total,
+        "total_debt_active": round(debt_active, 2),
+        "total_debt_writeoff": round(debt_writeoff, 2),
+        "total_debt_all": round(debt_all, 2),
         "fact_month": f"{prev_y}-{prev_m:02d}",
     }

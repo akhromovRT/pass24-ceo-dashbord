@@ -62,18 +62,32 @@ const filteredRows = computed(() =>
     : debtors.value.filter(r => r.aging_bucket === bucket.value),
 )
 
+// Разделение долга по статусам клиента (P3.0.3, вариант Б):
+// «к взысканию» — ACTIVE+SUSPENDED, «к списанию» — CHURNED+TRANSIT.
+const ACTIVE_DEBT_STATUSES = ['active', 'suspended']
+const WRITEOFF_DEBT_STATUSES = ['churned', 'transit']
+
 const metrics = computed(() => {
   const rows = debtors.value
-  const totalDebt = rows.reduce((s, r) => s + (r.total_debt || 0), 0)
-  const b90 = rows.filter(r => r.aging_bucket === '90+')
+  const debtActive = rows
+    .filter(r => ACTIVE_DEBT_STATUSES.includes(r.status))
+    .reduce((s, r) => s + (r.total_debt || 0), 0)
+  const debtWriteoff = rows
+    .filter(r => WRITEOFF_DEBT_STATUSES.includes(r.status))
+    .reduce((s, r) => s + (r.total_debt || 0), 0)
+  const b90 = rows.filter(r => r.aging_bucket === '90+'
+                                && ACTIVE_DEBT_STATUSES.includes(r.status))
   const sum90 = b90.reduce((s, r) => s + (r.total_debt || 0), 0)
-  const withMonths = rows.filter(r => r.months_overdue != null)
+  const withMonths = rows.filter(r => r.months_overdue != null
+                                       && ACTIVE_DEBT_STATUSES.includes(r.status))
   const avgMonths = withMonths.length
     ? withMonths.reduce((s, r) => s + r.months_overdue, 0) / withMonths.length
     : 0
+  const activeCount = rows.filter(r => ACTIVE_DEBT_STATUSES.includes(r.status)).length
   return [
-    { label: 'Общий долг', value: fmtRub(totalDebt) },
-    { label: 'Должников', value: String(rows.length) },
+    { label: 'Долг активных', value: fmtRub(debtActive) },
+    { label: 'К списанию', value: fmtRub(debtWriteoff) },
+    { label: 'Должников активных', value: String(activeCount) },
     { label: 'Просрочка 90+', value: `${b90.length} · ${fmtRub(sum90)}` },
     { label: 'Средняя просрочка', value: `${avgMonths.toFixed(1)} мес` },
   ]
@@ -139,7 +153,16 @@ const selectedSnapshotId = ref<string | null>(null)
 const sourceData = ref<any | null>(null)
 const sourceSearch = ref('')
 const showOnlyDiffs = ref(false)
-const onlyRegular = ref(false)
+
+// Пресеты фильтра «по статусам клиента» (P3.0.2 от 2026-05-28).
+// Каждый пресет = csv для API ?org_statuses=...; пустая строка = «без фильтра».
+const statusPresets = [
+  { label: 'Все', value: '' },
+  { label: 'Активные', value: 'active' },
+  { label: '+ Приостановл.', value: 'active,suspended' },
+  { label: 'Наши (вкл. Отток)', value: 'active,suspended,churned' },
+]
+const orgStatusesPreset = ref<string>('active')  // по умолчанию — только активные
 
 const workflowStatusOptions = [
   { label: 'Не начато', value: 'not_started' },
@@ -160,7 +183,9 @@ async function loadSource(snapshotId: string | null = null) {
       ? `/debt-snapshots/${snapshotId}`
       : '/debt-snapshots/latest'
     const res = await api.get(url, {
-      params: { only_regular: onlyRegular.value },
+      params: {
+        org_statuses: orgStatusesPreset.value || undefined,
+      },
     })
     sourceData.value = res.data
     selectedSnapshotId.value = res.data.snapshot.id
@@ -185,9 +210,10 @@ watch(selectedSnapshotId, (v, prev) => {
   if (v && v !== prev && v !== sourceData.value?.snapshot?.id) loadSource(v)
 })
 
-// При смене фильтра «Только наши клиенты» перезагружаем с бэка,
-// потому что фильтрация делается на сервере (с каскадом по дереву).
-watch(onlyRegular, () => {
+// При смене пресета статусов перезагружаем с бэка — фильтрация
+// серверная (каскад по дереву и подсчёт «расхождений» считаются от
+// уже отфильтрованного множества).
+watch(orgStatusesPreset, () => {
   if (mode.value === 'source') loadSource(selectedSnapshotId.value)
 })
 
@@ -465,11 +491,18 @@ const sourceSnapshotLabel = (s: any) =>
           <input type="checkbox" v-model="showOnlyDiffs" />
           Только расхождения
         </label>
-        <label class="source-toggle" :class="{ active: onlyRegular }"
-               title="Скрыть транзитные ЮЛ и потенциальных — оставить только постоянных клиентов из реестра">
-          <input type="checkbox" v-model="onlyRegular" />
-          Только наши клиенты
-        </label>
+        <div class="source-status-filter"
+             title="Какие статусы клиента показывать. По умолчанию — только активные.">
+          <span class="source-status-label">Клиенты:</span>
+          <SelectButton
+            v-model="orgStatusesPreset"
+            :options="statusPresets"
+            optionLabel="label"
+            optionValue="value"
+            :allow-empty="false"
+            size="small"
+          />
+        </div>
       </div>
 
       <SegmentBand
@@ -649,6 +682,15 @@ const sourceSnapshotLabel = (s: any) =>
   border-color: #b91c1c;
   background: #fef2f2;
   color: #b91c1c;
+}
+.source-status-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.source-status-label {
+  color: #475569;
+  font-size: 0.9rem;
 }
 .snap-opt {
   display: flex;

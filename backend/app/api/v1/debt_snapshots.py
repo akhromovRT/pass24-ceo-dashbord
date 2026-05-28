@@ -26,6 +26,23 @@ from app.models import (
 # Транзитные и потенциальные — отсекаем, это шум для дебиторки.
 _REGULAR_STATUSES = {OrgStatus.ACTIVE, OrgStatus.SUSPENDED, OrgStatus.CHURNED}
 
+# По комментарию Софьи от 2026-05-28 — нужен и более узкий срез
+# «только активные клиенты», поэтому фильтр параметризуется через
+# query-параметр org_statuses (csv). only_regular остаётся как обратно
+# совместимый алиас на _REGULAR_STATUSES.
+_VALID_STATUS_TOKENS = {s.value for s in OrgStatus}
+
+
+def _parse_org_statuses(raw: str | None) -> set[OrgStatus] | None:
+    """csv 'active,suspended' → set[OrgStatus]. Невалидные токены игнорируем."""
+    if not raw:
+        return None
+    tokens = {t.strip().lower() for t in raw.split(",") if t.strip()}
+    if not tokens:
+        return None
+    parsed = {OrgStatus(t) for t in tokens if t in _VALID_STATUS_TOKENS}
+    return parsed or None
+
 router = APIRouter(
     prefix="/debt-snapshots",
     tags=["debt-snapshots"],
@@ -88,7 +105,10 @@ def _serialize_row(row: DebtSnapshotRow) -> dict:
 
 
 def _build_full_response(
-    session: Session, snap: DebtSnapshot, only_regular: bool = False,
+    session: Session,
+    snap: DebtSnapshot,
+    only_regular: bool = False,
+    org_statuses: set[OrgStatus] | None = None,
 ) -> dict:
     rows = session.exec(
         select(DebtSnapshotRow)
@@ -120,18 +140,23 @@ def _build_full_response(
     # Workflow проработки по каждому buyer (status + comment) — одним SELECT.
     workflow_map = load_workflow_map(session, org_ids)
 
-    # Фильтр only_regular: оставляем только buyers, чьи Organization
-    # in_registry=True и status in {active, suspended, churned}. Транзит
-    # и потенциальные — отсекаем (это шум для разбора дебиторки).
-    # Затем строим множество разрешённых buyer-row-id и каскадно
-    # включаем их детей (contract → document) по parent_row_id.
-    if only_regular:
+    # Фильтр по статусам клиента (P3.0.2): если задан org_statuses — используем
+    # его (узкий срез, например только active). Иначе если only_regular=true —
+    # используем _REGULAR_STATUSES (обратно совместимый алиас). В обоих случаях
+    # требуем in_registry=True. Затем каскадно включаем детей по parent_row_id.
+    effective_statuses: set[OrgStatus] | None = None
+    if org_statuses:
+        effective_statuses = org_statuses
+    elif only_regular:
+        effective_statuses = _REGULAR_STATUSES
+
+    if effective_statuses is not None:
         allowed_buyer_ids: set[uuid.UUID] = set()
         for r in rows:
             if r.level != DebtSnapshotLevel.BUYER:
                 continue
             org = org_full_map.get(r.organization_id) if r.organization_id else None
-            if org and org.in_registry and org.status in _REGULAR_STATUSES:
+            if org and org.in_registry and org.status in effective_statuses:
                 allowed_buyer_ids.add(r.id)
 
         # Каскад: child включается, если parent в разрешённом множестве
@@ -174,6 +199,10 @@ def _build_full_response(
         "workflow_by_org": workflow_map,
         "diffs": diffs,
         "only_regular": only_regular,
+        "org_statuses": (
+            sorted(s.value for s in effective_statuses)
+            if effective_statuses is not None else None
+        ),
     }
 
 
@@ -189,6 +218,11 @@ def list_snapshots(session: Session = Depends(get_session)):
 @router.get("/latest")
 def get_latest_snapshot(
     only_regular: bool = Query(default=False),
+    org_statuses: str | None = Query(
+        default=None,
+        description="CSV статусов (active,suspended,churned,transit,prospect). "
+                    "Если задан — приоритетнее only_regular.",
+    ),
     session: Session = Depends(get_session),
 ):
     snap = session.exec(
@@ -196,13 +230,22 @@ def get_latest_snapshot(
     ).first()
     if not snap:
         raise HTTPException(status_code=404, detail="No debt snapshots yet")
-    return _build_full_response(session, snap, only_regular=only_regular)
+    return _build_full_response(
+        session, snap,
+        only_regular=only_regular,
+        org_statuses=_parse_org_statuses(org_statuses),
+    )
 
 
 @router.get("/{snapshot_id}")
 def get_snapshot(
     snapshot_id: uuid.UUID,
     only_regular: bool = Query(default=False),
+    org_statuses: str | None = Query(
+        default=None,
+        description="CSV статусов (active,suspended,churned,transit,prospect). "
+                    "Если задан — приоритетнее only_regular.",
+    ),
     session: Session = Depends(get_session),
 ):
     snap = session.exec(
@@ -210,4 +253,8 @@ def get_snapshot(
     ).first()
     if not snap:
         raise HTTPException(status_code=404, detail="Snapshot not found")
-    return _build_full_response(session, snap, only_regular=only_regular)
+    return _build_full_response(
+        session, snap,
+        only_regular=only_regular,
+        org_statuses=_parse_org_statuses(org_statuses),
+    )

@@ -204,6 +204,41 @@ class TestOnlyRegularFilter:
         finally:
             app.dependency_overrides.clear()
 
+    def test_org_statuses_narrow_to_active_only(self, db_session: Session):
+        """P3.0.2: org_statuses=active даёт ещё более узкий срез чем only_regular —
+        даже CHURNED-клиенты отсекаются. Софья 2026-05-28."""
+        _seed(db_session)
+        _mark_in_registry(db_session, "7700000001")
+        # Меняем active на CHURNED — теперь org_statuses=active должен дать пусто,
+        # а only_regular=true (active+suspended+churned) — оставить.
+        org = db_session.query(Organization).filter(
+            Organization.inn == "7700000001"
+        ).one()
+        org.status = OrgStatus.CHURNED
+        db_session.add(org)
+        db_session.commit()
+
+        client = _client_with_session(db_session)
+        try:
+            # only_regular=true — CHURNED проходит, rows есть
+            r = client.get("/api/v1/debt-snapshots/latest",
+                           params={"only_regular": "true"})
+            assert len(r.json()["rows"]) == 3
+
+            # org_statuses=active — CHURNED отсекается, пусто
+            r = client.get("/api/v1/debt-snapshots/latest",
+                           params={"org_statuses": "active"})
+            d = r.json()
+            assert d["rows"] == []
+            assert d["org_statuses"] == ["active"]
+
+            # org_statuses приоритетнее only_regular
+            r = client.get("/api/v1/debt-snapshots/latest",
+                           params={"org_statuses": "active", "only_regular": "true"})
+            assert r.json()["rows"] == []
+        finally:
+            app.dependency_overrides.clear()
+
     def test_active_buyer_keeps_children(self, db_session: Session):
         _seed(db_session)
         _mark_in_registry(db_session, "7700000001")

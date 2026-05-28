@@ -25,6 +25,7 @@ const presetOptions = [
   { label: 'Реестр должников', value: 'debtors' },
   { label: 'Дисциплина платежей', value: 'discipline' },
   { label: 'Состав показателя', value: 'composition' },
+  { label: 'Платежи', value: 'payments' },
 ]
 
 type MetricKey =
@@ -98,6 +99,15 @@ const COLUMN_CATALOG: Record<string, { key: string; label: string }[]> = {
     { key: 'last_payment_date', label: 'Дата последнего платежа' },
     { key: 'days_since_last', label: 'Дней с последнего платежа' },
   ],
+  payments: [
+    { key: 'doc_date', label: 'Дата платежа' },
+    { key: 'org_name', label: 'Контрагент' },
+    { key: 'inn', label: 'ИНН' },
+    { key: 'amount', label: 'Сумма, ₽' },
+    { key: 'raw_name', label: 'Назначение' },
+    { key: 'allocated_periods', label: 'Зачтено за' },
+    { key: 'manager', label: 'Менеджер' },
+  ],
 }
 
 const statusOptions = [
@@ -119,7 +129,7 @@ const sortDirOptions = [
   { label: '↑ возр.', value: 'asc' },
 ]
 
-const CURRENCY_KEYS = new Set(['monthly_ap', 'total_debt', 'priority', 'contribution'])
+const CURRENCY_KEYS = new Set(['monthly_ap', 'total_debt', 'priority', 'contribution', 'amount'])
 const PERCENT_KEYS = new Set(['collectability', 'on_time'])
 
 // Минимальная ширина колонки — чтобы таблица имела предсказуемую ширину и
@@ -153,7 +163,7 @@ function colMinWidth(key: string): string {
 
 // --- состояние --------------------------------------------------------------
 
-const preset = ref<'debtors' | 'discipline' | 'composition'>('debtors')
+const preset = ref<'debtors' | 'discipline' | 'composition' | 'payments'>('debtors')
 
 const criteria = reactive({
   period_from: null as Date | null,
@@ -170,6 +180,12 @@ const criteria = reactive({
   include_excluded: false,
   metric: null as MetricKey | null,
   period: null as string | null,
+  // P3.0.4 (Софья 2026-05-28): точный диапазон дат и фильтр по контрагентам.
+  // Применяются в пресете payments; для остальных пресетов backend их
+  // игнорирует через ConfigDict(extra="ignore").
+  date_from: null as Date | null,
+  date_to: null as Date | null,
+  organization_ids: [] as string[],
 })
 
 const controlValue = ref<number | null>(null)
@@ -198,6 +214,26 @@ const periodDate = computed<Date | null>({
 const managers = ref<{ id: string; name: string }[]>([])
 const templates = ref<any[]>([])
 const selectedTemplate = ref<any>(null)
+
+// Список организаций для фильтра «Контрагенты» в пресете payments (P3.0.4).
+// Загружаем лениво — только при первом переключении на payments.
+const organizationOptions = ref<{ value: string; label: string }[]>([])
+const organizationsLoading = ref(false)
+async function loadOrganizationsForFilter() {
+  if (organizationOptions.value.length || organizationsLoading.value) return
+  organizationsLoading.value = true
+  try {
+    // Берём страницу большего размера; в проде ~300 организаций — влезает.
+    const res = await api.get('/organizations', { params: { page_size: 1000 } })
+    const items = Array.isArray(res.data) ? res.data : res.data.items ?? []
+    organizationOptions.value = items.map((o: any) => ({
+      value: String(o.id),
+      label: `${o.name_display || o.name_1c} (${o.inn})`,
+    }))
+  } finally {
+    organizationsLoading.value = false
+  }
+}
 
 const rows = ref<any[]>([])
 const columns = ref<{ key: string; header: string }[]>([])
@@ -264,7 +300,17 @@ function buildCriteria() {
     c.metric = criteria.metric
     c.period = criteria.period
   }
+  if (preset.value === 'payments') {
+    c.date_from = isoDate(criteria.date_from)
+    c.date_to = isoDate(criteria.date_to)
+    c.organization_ids = criteria.organization_ids
+  }
   return c
+}
+
+function isoDate(d: Date | null): string | null {
+  if (!d) return null
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
 // --- генерация и экспорт ----------------------------------------------------
@@ -398,6 +444,9 @@ watch(preset, () => {
     criteria.metric = null
     criteria.period = null
   }
+  if (preset.value === 'payments') {
+    loadOrganizationsForFilter()
+  }
   if (route.query.preset && route.query.preset !== preset.value) {
     router.replace({ query: {} })
   }
@@ -448,6 +497,8 @@ onMounted(() => {
         ? 'Кого взыскивать: должники с приоритетом взыскания (долг × возраст × шанс возврата).'
         : preset === 'discipline'
         ? 'Кто соскальзывает в долг: собираемость, дисциплина и тренд по активным подписчикам.'
+        : preset === 'payments'
+        ? 'Реестр платежей с датой, контрагентом и зачётом по периодам. Выбирайте точный диапазон дат и нужных контрагентов — сверять с выгрузкой Ирины из 1С.'
         : 'Состав KPI-плитки дашборда: какие клиенты и суммы попали в показатель. Контрольная сумма в шапке должна совпадать с плиткой.' }}
     </p>
 
@@ -468,6 +519,26 @@ onMounted(() => {
             :view="metricPeriodKind(criteria.metric) === 'year' ? 'year' : 'month'"
             :dateFormat="metricPeriodKind(criteria.metric) === 'year' ? 'yy' : 'mm/yy'"
             showButtonBar />
+        </label>
+
+        <!-- Платежи: точный диапазон дат + фильтр по контрагентам (P3.0.4) -->
+        <label v-if="preset === 'payments'" class="field">
+          <span>Дата платежа с</span>
+          <DatePicker v-model="criteria.date_from" dateFormat="dd.mm.yy"
+                      placeholder="любая" showButtonBar showIcon />
+        </label>
+        <label v-if="preset === 'payments'" class="field">
+          <span>Дата платежа по</span>
+          <DatePicker v-model="criteria.date_to" dateFormat="dd.mm.yy"
+                      placeholder="любая" showButtonBar showIcon />
+        </label>
+        <label v-if="preset === 'payments'" class="field" style="grid-column: span 2">
+          <span>Контрагенты</span>
+          <MultiSelect v-model="criteria.organization_ids" :options="organizationOptions"
+                       optionLabel="label" optionValue="value"
+                       :loading="organizationsLoading"
+                       placeholder="любой" filter
+                       :maxSelectedLabels="3" />
         </label>
         <label class="field">
           <span>Период с</span>
