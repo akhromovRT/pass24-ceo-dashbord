@@ -4,8 +4,6 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-import openpyxl
-
 from app.parser.period_extraction import extract_periods
 from app.parser.utils import load_workbook_any
 
@@ -20,9 +18,20 @@ _CONTRACT_RE = re.compile(
 _PERIOD_SLASH_RE = re.compile(r"(?:ЗА\s+)?(\d{2})\s*/\s*(\d{4})", re.IGNORECASE)
 
 _MONTHS_MAP = {
-    "январ": 1, "феврал": 2, "март": 3, "апрел": 4,
-    "май": 5, "мая": 5, "мае": 5, "июн": 6, "июл": 7,
-    "август": 8, "сентябр": 9, "октябр": 10, "ноябр": 11, "декабр": 12,
+    "январ": 1,
+    "феврал": 2,
+    "март": 3,
+    "апрел": 4,
+    "май": 5,
+    "мая": 5,
+    "мае": 5,
+    "июн": 6,
+    "июл": 7,
+    "август": 8,
+    "сентябр": 9,
+    "октябр": 10,
+    "ноябр": 11,
+    "декабр": 12,
 }
 _MONTH_PERIOD_RE = re.compile(
     r"(?:ЗА|В)\s+(" + "|".join(_MONTHS_MAP.keys()) + r")[А-ЯЁа-яё]*\s+(\d{4})",
@@ -31,8 +40,10 @@ _MONTH_PERIOD_RE = re.compile(
 
 _TARIFF_RE = re.compile(r"\b(PROF|ПРОФ|STANDART|СТАНДАРТ)\b", re.IGNORECASE)
 _TARIFF_MAP = {
-    "PROF": "PROF", "ПРОФ": "PROF",
-    "STANDART": "STANDART", "СТАНДАРТ": "STANDART",
+    "PROF": "PROF",
+    "ПРОФ": "PROF",
+    "STANDART": "STANDART",
+    "СТАНДАРТ": "STANDART",
 }
 
 

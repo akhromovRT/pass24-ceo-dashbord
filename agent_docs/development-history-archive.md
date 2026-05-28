@@ -4,6 +4,64 @@
 Читать при необходимости.
 
 ## Записи
+
+### 2026-05-21 — TRANSIT — новый статус для бывших плательщиков
+
+**Контекст:** при сверке реестра Софьи обнаружены два смежных кейса, которые в существующих статусах (ACTIVE/CHURNED/SUSPENDED/PROSPECT) описать нельзя: (1) старая карточка компании после переоформления на новый ИНН (Бристоль Сервис, Гонцова/Новая Опалиха) — клиент тот же, но в системе две active-записи, обе с одинаковой АП; (2) юр.лица, переводящие деньги за другого клиента (ПРОМСТРОЙХОЛДИНГ платит за Гаджикурбанова, Мораш — за ГАРД-КОМФОРТ, Сбербанк/Реутова — за Белое озеро). В обоих случаях это **не отток** — клиент-получатель услуги не уходит, меняется только плательщик/ИНН.
+
+**Что сделано:**
+- **Модель:** `OrgStatus.TRANSIT = "transit"`. Миграция `c4f1a2e8b3d6` (ALTER TYPE ADD VALUE). Сразу поймали баг: SQLAlchemy сериализует enum по `.name` (UPPERCASE), а добавил `transit` lowercase — фикс-миграция `d8e2b91f5a7c` (RENAME VALUE → 'TRANSIT'). PATCH `/organizations` авто-проставляет `churn_month` при переходе в TRANSIT — той же логикой что для CHURNED.
+- **Семантика:** в `ChargeService.rebuild_for_organization` к стопу начислений добавлен TRANSIT (`status in (CHURNED, TRANSIT)` + churn_month). В `dashboard.py` TRANSIT исключён из `stopped_since_year_start` и из знаменателя churn rate — клиент не «ушёл», он сменил ИНН/плательщика. Composition `_STATUS_LABELS["TRANSIT"] = "Транзит"`.
+- **Frontend:** «Транзит» добавлен в `statusOptions` ReportsView, DebtorsView, ClientCardView.
+- **Данные:** применено 9 PATCH'ей — Бристоль (7703746155) и Гонцова (773179504256) → TRANSIT (старые ИНН после переоформления); ПРОМСТРОЙХОЛДИНГ, Мораш, Сбербанк, Автокомбинат, Котельников → TRANSIT (транзитные плательщики); ТПС-РУС (6732210800) и АйТи Десижн (7720735065) → ACTIVE с АП (200K и 15K соответственно). Бэкап `/root/backups/ceo24-pre-transit-2026-05-21-0935.dump`.
+
+**Эффект на дашборд:** MRR план 4 754 381 → **4 945 963 ₽** (+191K от ТПС-РУС/АйТи Десижн минус Бристоль/Гонцова). Активные 281 → 281 (баланс +2/−2). Отток с года 30 → 27 (3 транзитных вышли из расчёта). Churn rate 14.1% → 12.7%.
+
+**Тесты:** +2 (`test_active_to_transit_autosets_churn_month`, `test_transit_to_active_clears_churn_month`). Всего 221 passed.
+
+**ADR:** ADR-017.
+
+**Следующий шаг:** дедупликация платежей и реассайн транзитных платежей (закрыто следующей записью).
+
+### 2026-05-21 — churn_month: месяц отключения для CHURNED-клиентов
+
+**Контекст:** клиент в статусе «Отток» — это тот, кому мы перестали выставлять
+АП. Раньше начисления продолжали создаваться синтетически из тарифа, и долг
+такого клиента продолжал «расти» в дебиторке, что искажало картину.
+
+**Что сделано:**
+- **Модель:** в `Organization` добавлено поле `churn_month: date | None`
+  (1-е число месяца последнего начисления АП). Миграция
+  `b5d2e9a47c1f_add_churn_month_to_organizations`.
+- **ChargeService.rebuild_for_organization** для клиента `status==CHURNED`
+  и `churn_month is not None` подрезает `through = min(through, churn_month)`.
+  Если `churn_month < start` — лента пуста. Активные клиенты не затронуты:
+  для не-CHURNED поле игнорируется на этапе генерации (защита от ошибок).
+- **PATCH /organizations/{inn}:** Pydantic-валидатор нормализует день
+  `churn_month` к 1-му. При переходе ACTIVE → CHURNED без явного
+  `churn_month` — auto-fill месяцем последнего платежа клиента. Если
+  платежей нет — 400 «установите вручную». При CHURNED → ACTIVE —
+  очистка `churn_month`. Любое изменение `status` или `churn_month`
+  триггерит `ChargeService.rebuild_for_organization` +
+  `AllocationService.recompute_for_organization` только для этого клиента.
+- **Backfill-скрипт:** `backend/scripts/backfill_churn_months.py`.
+  Обрабатывает только CHURNED-клиентов с `churn_month IS NULL`. ACTIVE
+  никогда не затрагивает. Клиенты без платежей попадают в `manual_review`
+  и НЕ обновляются. Есть `--dry-run` и `--json`.
+- **UI:** «Месяц отключения» добавлен в ClientCardView (DatePicker month,
+  виден когда status='churned'), DebtorsView (колонка), BillingView
+  (колонка), Reports/composition и Reports/debtors/discipline
+  (поле в каталоге колонок). Backend `/billing/debtors` отдаёт
+  `churn_month`.
+- **Тесты:** `tests/test_churn_month.py` (4 кейса ChargeService),
+  `tests/test_api_organizations_churn.py` (5 кейсов PATCH).
+  Полный набор: 219 passed, 9 skipped.
+
+**Деплой:**
+1. `alembic upgrade head` на проде.
+2. `python -m scripts.backfill_churn_months --dry-run` → ревью списка.
+3. `python -m scripts.backfill_churn_months` → применение.
+4. Manual review для клиентов без платежей.
 ### 2026-05-20 — Drill-down KPI-плиток Dashboard в раздел «Отчёты»
 
 **Контекст:** руководителю нужно видеть «откуда взялось число» на каждой

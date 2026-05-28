@@ -3,9 +3,12 @@ from decimal import Decimal
 
 from sqlmodel import Session, select
 
-from app.models import Organization, Contract, Document, ImportRun, Alert
+from app.models import Alert, Contract, Document, Organization
 from app.parser.debt_report import (
-    ParsedBuyer, ParsedContract, ParsedDocument, ParseResult,
+    ParsedBuyer,
+    ParsedContract,
+    ParsedDocument,
+    ParseResult,
 )
 from app.services.import_service import ImportService
 
@@ -29,7 +32,7 @@ def _make_parse_result() -> ParseResult:
         documents=[doc],
     )
     buyer = ParsedBuyer(
-        name='7 НЕБО ТСН_ДИАДОК',
+        name="7 НЕБО ТСН_ДИАДОК",
         inn="9717053891",
         sold=Decimal("18000.00"),
         paid=Decimal("18000.00"),
@@ -64,9 +67,7 @@ class TestImportService:
         svc = ImportService(db_session)
         svc.process_import(parse_result)
 
-        org = db_session.exec(
-            select(Organization).where(Organization.inn == "9717053891")
-        ).first()
+        org = db_session.exec(select(Organization).where(Organization.inn == "9717053891")).first()
         assert org is not None
         assert "7 НЕБО" in org.name_1c
 
@@ -110,9 +111,7 @@ class TestImportService:
         svc = ImportService(db_session)
         svc.process_import(parse_result)
 
-        org = db_session.exec(
-            select(Organization).where(Organization.inn == "9717053891")
-        ).first()
+        org = db_session.exec(select(Organization).where(Organization.inn == "9717053891")).first()
         assert "_ДИАДОК" not in org.name_1c
         assert "_СБИС" not in org.name_1c
 
@@ -129,21 +128,40 @@ def test_payments_import_triggers_ledger_recompute(db_session: Session):
     )
     from app.parser.bank_statement import BankStatementResult, ParsedPayment, PaymentInfo
 
-    org = Organization(inn="7700000010", name_1c="Бэнк Клиент",
-                       status=OrgStatus.ACTIVE, monthly_ap=Decimal("8000"))
+    org = Organization(
+        inn="7700000010", name_1c="Бэнк Клиент", status=OrgStatus.ACTIVE, monthly_ap=Decimal("8000")
+    )
     db_session.add(org)
     db_session.flush()
-    db_session.add(TariffPeriod(organization_id=org.id, valid_from=date(2026, 1, 1),
-                                monthly_amount=Decimal("8000")))
-    db_session.add(MonthlyCharge(organization_id=org.id, year=2026, month=1,
-                                 amount=Decimal("8000"),
-                                 source=ChargeSource.SYNTHETIC_TARIFF))
+    db_session.add(
+        TariffPeriod(
+            organization_id=org.id, valid_from=date(2026, 1, 1), monthly_amount=Decimal("8000")
+        )
+    )
+    db_session.add(
+        MonthlyCharge(
+            organization_id=org.id,
+            year=2026,
+            month=1,
+            amount=Decimal("8000"),
+            source=ChargeSource.SYNTHETIC_TARIFF,
+        )
+    )
     db_session.commit()
-    result = BankStatementResult(filename="t.xlsx", payments=[
-        ParsedPayment(date=date(2026, 1, 15), doc_number="1", amount=Decimal("8000"),
-                      counterparty="Бэнк Клиент", inn="7700000010",
-                      description="оплата за доступ", payment_info=PaymentInfo()),
-    ])
+    result = BankStatementResult(
+        filename="t.xlsx",
+        payments=[
+            ParsedPayment(
+                date=date(2026, 1, 15),
+                doc_number="1",
+                amount=Decimal("8000"),
+                counterparty="Бэнк Клиент",
+                inn="7700000010",
+                description="оплата за доступ",
+                payment_info=PaymentInfo(),
+            ),
+        ],
+    )
     ImportService(db_session).process_payments_report(result, file_hash="hash-recompute-1")
     allocs = db_session.exec(select(PaymentAllocation)).all()
     assert len(allocs) >= 1

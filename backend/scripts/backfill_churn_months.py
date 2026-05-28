@@ -12,6 +12,7 @@
 Запуск: cd backend && python -m scripts.backfill_churn_months
         cd backend && python -m scripts.backfill_churn_months --dry-run
 """
+
 from __future__ import annotations
 
 import argparse
@@ -56,19 +57,23 @@ def backfill(session: Session, dry_run: bool = False) -> dict:
     for org in candidates:
         last_month = _last_payment_month(session, org.id)
         if last_month is None:
-            manual_review.append({
-                "inn": org.inn,
-                "name": org.name_display or org.name_1c,
-                "reason": "0 платежей",
-            })
+            manual_review.append(
+                {
+                    "inn": org.inn,
+                    "name": org.name_display or org.name_1c,
+                    "reason": "0 платежей",
+                }
+            )
             continue
 
         if dry_run:
-            processed.append({
-                "inn": org.inn,
-                "name": org.name_display or org.name_1c,
-                "would_set_churn_month": last_month.isoformat(),
-            })
+            processed.append(
+                {
+                    "inn": org.inn,
+                    "name": org.name_display or org.name_1c,
+                    "would_set_churn_month": last_month.isoformat(),
+                }
+            )
             continue
 
         org.churn_month = last_month
@@ -78,15 +83,19 @@ def backfill(session: Session, dry_run: bool = False) -> dict:
         start = charge_svc.charge_start(org.id)
         if start is not None:
             charge_svc.rebuild_for_organization(
-                org.id, start=start, through=date.today(),
+                org.id,
+                start=start,
+                through=date.today(),
             )
             alloc_svc.recompute_for_organization(org.id)
 
-        processed.append({
-            "inn": org.inn,
-            "name": org.name_display or org.name_1c,
-            "churn_month": last_month.isoformat(),
-        })
+        processed.append(
+            {
+                "inn": org.inn,
+                "name": org.name_display or org.name_1c,
+                "churn_month": last_month.isoformat(),
+            }
+        )
 
     if not dry_run:
         session.commit()
@@ -99,13 +108,11 @@ def backfill(session: Session, dry_run: bool = False) -> dict:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Backfill churn_month для CHURNED-клиентов"
+    parser = argparse.ArgumentParser(description="Backfill churn_month для CHURNED-клиентов")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Только показать, что было бы сделано"
     )
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Только показать, что было бы сделано")
-    parser.add_argument("--json", action="store_true",
-                        help="Вывести результат в JSON")
+    parser.add_argument("--json", action="store_true", help="Вывести результат в JSON")
     args = parser.parse_args()
 
     engine = create_engine(str(settings.DATABASE_URL), echo=False)

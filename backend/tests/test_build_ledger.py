@@ -6,8 +6,8 @@ from sqlmodel import select
 from app.models import (
     Contract,
     ContractType,
-    Document,
     DocType,
+    Document,
     MonthlyCharge,
     Organization,
     OrgStatus,
@@ -18,17 +18,32 @@ from app.services.build_ledger import build_ledger
 
 
 def test_build_ledger_end_to_end(db_session):
-    org = Organization(inn="7700000020", name_1c="Полный Клиент",
-                       status=OrgStatus.ACTIVE, monthly_ap=Decimal("9000"))
+    org = Organization(
+        inn="7700000020",
+        name_1c="Полный Клиент",
+        status=OrgStatus.ACTIVE,
+        monthly_ap=Decimal("9000"),
+    )
     db_session.add(org)
     db_session.flush()
-    contract = Contract(organization_id=org.id, contract_type=ContractType.OTHER,
-                        contract_number="1C-PAYMENTS", raw_name="payments")
+    contract = Contract(
+        organization_id=org.id,
+        contract_type=ContractType.OTHER,
+        contract_number="1C-PAYMENTS",
+        raw_name="payments",
+    )
     db_session.add(contract)
     db_session.flush()
-    db_session.add(Document(contract_id=contract.id, organization_id=org.id,
-                            doc_type=DocType.PAYMENT, doc_date=date(2026, 2, 10),
-                            amount=Decimal("9000"), raw_name="оплата за доступ"))
+    db_session.add(
+        Document(
+            contract_id=contract.id,
+            organization_id=org.id,
+            doc_type=DocType.PAYMENT,
+            doc_date=date(2026, 2, 10),
+            amount=Decimal("9000"),
+            raw_name="оплата за доступ",
+        )
+    )
     db_session.commit()
 
     summary = build_ledger(db_session)

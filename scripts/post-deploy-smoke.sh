@@ -24,10 +24,18 @@ if [[ "$code" != "401" ]]; then
 fi
 echo "OK: /api/v1/dashboard/summary 401"
 
-# 3. /docs в проде должен быть 404 (закрыт, если DEBUG=false)
-code=$(curl -s -o /dev/null -w "%{http_code}" "${HOST}/docs")
+# 3. /api/v1/docs в проде должен быть 404 (закрыт, если DEBUG=false).
+# Без префикса /api/ путь /docs ловит SPA-fallback nginx и отдаёт index.html
+# с кодом 200 — это норма, не сигнал что docs открыт.
+code=$(curl -s -o /dev/null -w "%{http_code}" "${HOST}/api/v1/docs")
 if [[ "$code" != "404" ]]; then
-    echo "WARN: /docs вернул $code (ожидали 404 — DEBUG=true?)"
+    echo "FAIL: /api/v1/docs вернул $code (ожидали 404 — DEBUG=true в проде?)"
+    exit 1
+fi
+echo "OK: /api/v1/docs 404"
+code=$(curl -s -o /dev/null -w "%{http_code}" "${HOST}/openapi.json")
+if [[ "$code" != "404" ]]; then
+    echo "WARN: /openapi.json вернул $code (ожидали 404 — это SPA-fallback или DEBUG=true?)"
 fi
 
 # 4. /healthz контейнера фронтенда (внутренний путь)

@@ -1,12 +1,20 @@
 """Регресс: helpers, вынесенные из dashboard.py, ведут себя как раньше."""
+
 from datetime import date
 from decimal import Decimal
 
 from sqlmodel import Session
 
 from app.models import (
-    AllocationBasis, ChargeSource, Contract, ContractType,
-    DocType, Document, MonthlyCharge, Organization, OrgStatus,
+    AllocationBasis,
+    ChargeSource,
+    Contract,
+    ContractType,
+    DocType,
+    Document,
+    MonthlyCharge,
+    Organization,
+    OrgStatus,
     PaymentAllocation,
 )
 from app.services.dashboard_service import (
@@ -26,9 +34,13 @@ def _org(session, inn, **kw):
 
 
 def _charge(session, org, year, month, amount):
-    c = MonthlyCharge(organization_id=org.id, year=year, month=month,
-                      amount=Decimal(str(amount)),
-                      source=ChargeSource.SYNTHETIC_TARIFF)
+    c = MonthlyCharge(
+        organization_id=org.id,
+        year=year,
+        month=month,
+        amount=Decimal(str(amount)),
+        source=ChargeSource.SYNTHETIC_TARIFF,
+    )
     session.add(c)
     session.commit()
     session.refresh(c)
@@ -36,21 +48,26 @@ def _charge(session, org, year, month, amount):
 
 
 def _pay(session, org, charge, amount, pay_date):
-    contract = Contract(organization_id=org.id,
-                        contract_type=ContractType.SUBSCRIPTION)
+    contract = Contract(organization_id=org.id, contract_type=ContractType.SUBSCRIPTION)
     session.add(contract)
     session.commit()
     session.refresh(contract)
-    doc = Document(contract_id=contract.id, organization_id=org.id,
-                   doc_type=DocType.PAYMENT, doc_date=pay_date,
-                   amount=Decimal(str(amount)))
+    doc = Document(
+        contract_id=contract.id,
+        organization_id=org.id,
+        doc_type=DocType.PAYMENT,
+        doc_date=pay_date,
+        amount=Decimal(str(amount)),
+    )
     session.add(doc)
     session.commit()
     session.refresh(doc)
-    alloc = PaymentAllocation(payment_document_id=doc.id,
-                              monthly_charge_id=charge.id,
-                              allocated_amount=Decimal(str(amount)),
-                              basis=AllocationBasis.EXPLICIT_PERIOD)
+    alloc = PaymentAllocation(
+        payment_document_id=doc.id,
+        monthly_charge_id=charge.id,
+        allocated_amount=Decimal(str(amount)),
+        basis=AllocationBasis.EXPLICIT_PERIOD,
+    )
     session.add(alloc)
     session.commit()
 
@@ -59,14 +76,18 @@ def test_plan_mrr_total_sums_active_ap(db_session: Session):
     _org(db_session, "1", status=OrgStatus.ACTIVE, monthly_ap=Decimal("10000"))
     _org(db_session, "2", status=OrgStatus.ACTIVE, monthly_ap=Decimal("5000"))
     _org(db_session, "3", status=OrgStatus.CHURNED, monthly_ap=Decimal("999"))
-    _org(db_session, "4", status=OrgStatus.ACTIVE, monthly_ap=Decimal("1000"),
-         excluded_from_analytics=True)
+    _org(
+        db_session,
+        "4",
+        status=OrgStatus.ACTIVE,
+        monthly_ap=Decimal("1000"),
+        excluded_from_analytics=True,
+    )
     assert plan_mrr_total(db_session) == 15000.0
 
 
 def test_collected_by_charge_month(db_session: Session):
-    org = _org(db_session, "10", status=OrgStatus.ACTIVE,
-               monthly_ap=Decimal("10000"))
+    org = _org(db_session, "10", status=OrgStatus.ACTIVE, monthly_ap=Decimal("10000"))
     ch = _charge(db_session, org, 2026, 4, 10000)
     _pay(db_session, org, ch, 10000, date(2026, 4, 5))
     out = collected_by_charge_month(db_session)

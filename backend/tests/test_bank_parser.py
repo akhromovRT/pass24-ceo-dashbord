@@ -5,9 +5,7 @@ import pytest
 
 from app.parser.bank_statement import extract_payment_info, parse_bank_statement
 
-BANK_STATEMENT_PATH = os.path.expanduser(
-    "~/Downloads/Выписка_40702810002630000347_03.03.2026.xlsx"
-)
+BANK_STATEMENT_PATH = os.path.expanduser("~/Downloads/Выписка_40702810002630000347_03.03.2026.xlsx")
 
 
 class TestExtractPaymentInfo:
@@ -18,21 +16,15 @@ class TestExtractPaymentInfo:
         assert info.invoice_number == "238"
 
     def test_extract_invoice_bp_prefix(self):
-        info = extract_payment_info(
-            "ОПЛАТА ПО СЧЕТУ № БП-231 ОТ 24.02.2026 ЗА ДОСТУП К СИСТЕМЕ"
-        )
+        info = extract_payment_info("ОПЛАТА ПО СЧЕТУ № БП-231 ОТ 24.02.2026 ЗА ДОСТУП К СИСТЕМЕ")
         assert info.invoice_number == "БП-231"
 
     def test_extract_contract_number(self):
-        info = extract_payment_info(
-            "ПО ДОГОВОРУ ОКАЗАНИЯ УСЛУГ № ИС/01082018 ОТ 01.08.2018"
-        )
+        info = extract_payment_info("ПО ДОГОВОРУ ОКАЗАНИЯ УСЛУГ № ИС/01082018 ОТ 01.08.2018")
         assert info.contract_number == "ИС/01082018"
 
     def test_extract_contract_number_dashes(self):
-        info = extract_payment_info(
-            "ПО ДОГОВОРУ №10129-/02/2023 ОТ 20.02.2023Г."
-        )
+        info = extract_payment_info("ПО ДОГОВОРУ №10129-/02/2023 ОТ 20.02.2023Г.")
         assert info.contract_number == "10129-/02/2023"
 
     def test_extract_period_month_name(self):

@@ -4,6 +4,7 @@
 2=Номер, 3=Дата, 4=Поступление, 6=Контрагент, 7=ИНН, 8=Договор,
 11=Назначение платежа. Заголовок — строка 1, данные — со строки 2.
 """
+
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -64,15 +65,17 @@ def parse_payments_report(file_path: str | Path) -> BankStatementResult:
         if ep.periods:
             info.period_year, info.period_month = ep.periods[0]
 
-        result.payments.append(ParsedPayment(
-            date=parsed_date,
-            doc_number=doc_number,
-            amount=amount,
-            counterparty=counterparty,
-            inn=inn,
-            description=description,
-            payment_info=info,
-        ))
+        result.payments.append(
+            ParsedPayment(
+                date=parsed_date,
+                doc_number=doc_number,
+                amount=amount,
+                counterparty=counterparty,
+                inn=inn,
+                description=description,
+                payment_info=info,
+            )
+        )
 
     wb.close()
     return result

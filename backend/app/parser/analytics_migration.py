@@ -15,20 +15,20 @@ from pathlib import Path
 import openpyxl
 
 # --- Column mapping (1-indexed) ---
-COL_INN = 1        # A
-COL_NAME = 2       # B
-COL_CONTRACT = 3   # C
-COL_DATE = 4       # D
-COL_AP = 5          # E
-COL_PERIOD = 6      # F
-COL_OBJECT = 7      # G
-COL_OBJ_TYPE = 8    # H
-COL_STATUS = 9      # I
-COL_CLOUD = 10      # J
-COL_SYSNUM = 11     # K
+COL_INN = 1  # A
+COL_NAME = 2  # B
+COL_CONTRACT = 3  # C
+COL_DATE = 4  # D
+COL_AP = 5  # E
+COL_PERIOD = 6  # F
+COL_OBJECT = 7  # G
+COL_OBJ_TYPE = 8  # H
+COL_STATUS = 9  # I
+COL_CLOUD = 10  # J
+COL_SYSNUM = 11  # K
 COL_EQUIPMENT = 12  # L
-COL_ADDRESS = 13    # M
-COL_CITY = 14       # N
+COL_ADDRESS = 13  # M
+COL_CITY = 14  # N
 
 # 2025 months: pairs of (plan_col, fact_col) starting at P(16)
 # P/Q=Jan, R/S=Feb, T/U=Mar, V/W=Apr, X/Y=May, Z/AA=Jun,

@@ -4,18 +4,17 @@ from sqlalchemy import engine_from_config, pool
 from sqlmodel import SQLModel
 
 from alembic import context
-
 from app.core.config import settings
 
 # Import all models so SQLModel.metadata knows about them
 from app.models import (  # noqa: F401
-    Organization,
+    Alert,
     Contract,
     Document,
-    MonthlySnapshot,
     ImportRun,
+    MonthlySnapshot,
+    Organization,
     User,
-    Alert,
 )
 
 config = context.config

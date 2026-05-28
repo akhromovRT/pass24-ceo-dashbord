@@ -142,12 +142,11 @@ UNASSIGNED_CLIENT (в реестре >14 дн без manager_id), CHURN_RISK (а
 counts по ключевым таблицам + sanity-чек (есть admin, есть in_registry orgs).
 Запускать раз в квартал.
 
-### Бэкап в Yandex Object Storage / S3
-- Сейчас бэкапы локально на сервере + pull на ноут (две точки).
-- Третья — внешний S3 — защитит от одновременного отказа двух первых (редко, но возможно).
-- Yandex S3 free tier — до 1 GB.
-- В скрипт `ceo24-backup.sh` добавить `aws s3 cp` (или `s3cmd`) после локального дампа.
-- **Срок:** 1 день. **Условие:** Y.Cloud / AWS аккаунт.
+### Бэкап в S3 (offsite) ✅ Закрыто 2026-05-28
+- Подключён TimeWeb Cloud S3, бакет `pass24-backups`, наш префикс `ceo24/`.
+- `ceo24-backup.sh` после успешного локального дампа выполняет `aws s3 cp` через endpoint `https://s3.twcstorage.ru`. При сбое S3 локальный бэкап не теряется (скрипт не валится, пишет ERROR в лог).
+- Ретеншн: локально 14 дней, S3 — 30 дней (чистится самим скриптом по `LastModified`).
+- Секреты — `/etc/ceo24/backup-s3.env` (root:root 600). Подробности — `runbook.md`.
 
 ### Vertical scale (RAM)
 - Сейчас VPS 2 GB + 2 GB swap. Под текущей нагрузкой норм, но при тяжёлых импортах backend получал OOM (Exit 137).

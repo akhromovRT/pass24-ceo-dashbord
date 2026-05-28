@@ -1,4 +1,5 @@
 """Ручная правка разнесения платежа по начислениям леджера."""
+
 import uuid
 from decimal import Decimal
 
@@ -41,9 +42,7 @@ def override_allocations(
         raise HTTPException(status_code=404, detail="Payment not found")
 
     for a in session.exec(
-        select(PaymentAllocation).where(
-            PaymentAllocation.payment_document_id == document_id
-        )
+        select(PaymentAllocation).where(PaymentAllocation.payment_document_id == document_id)
     ).all():
         session.delete(a)
     session.flush()
@@ -56,13 +55,15 @@ def override_allocations(
                 MonthlyCharge.month == item.month,
             )
         ).first()
-        session.add(PaymentAllocation(
-            payment_document_id=document_id,
-            monthly_charge_id=charge.id if charge else None,
-            allocated_amount=Decimal(str(item.amount)),
-            basis=AllocationBasis.MANUAL,
-            is_manual=True,
-        ))
+        session.add(
+            PaymentAllocation(
+                payment_document_id=document_id,
+                monthly_charge_id=charge.id if charge else None,
+                allocated_amount=Decimal(str(item.amount)),
+                basis=AllocationBasis.MANUAL,
+                is_manual=True,
+            )
+        )
     session.flush()
 
     AllocationService(session).recompute_for_organization(payment.organization_id)

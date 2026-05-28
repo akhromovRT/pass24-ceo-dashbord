@@ -30,7 +30,9 @@ class DebtSnapshot(SQLModel, table=True):
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     import_run_id: uuid.UUID = Field(
-        foreign_key="import_runs.id", unique=True, index=True,
+        foreign_key="import_runs.id",
+        unique=True,
+        index=True,
     )
     filename: str
     period_start: date | None = None
@@ -61,10 +63,13 @@ class DebtSnapshotRow(SQLModel, table=True):
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     snapshot_id: uuid.UUID = Field(
-        foreign_key="debt_snapshots.id", index=True,
+        foreign_key="debt_snapshots.id",
+        index=True,
     )
     parent_row_id: uuid.UUID | None = Field(
-        default=None, foreign_key="debt_snapshot_rows.id", index=True,
+        default=None,
+        foreign_key="debt_snapshot_rows.id",
+        index=True,
     )
     level: DebtSnapshotLevel
     # Порядковый индекс строки в файле — UI отображает в исходном порядке 1С.
@@ -94,11 +99,15 @@ class DebtSnapshotRow(SQLModel, table=True):
     # Связь с актуальными сущностями БД — где удалось сопоставить.
     # Для физлиц без ИНН organization_id = None (полностью допустимый кейс).
     organization_id: uuid.UUID | None = Field(
-        default=None, foreign_key="organizations.id", index=True,
+        default=None,
+        foreign_key="organizations.id",
+        index=True,
     )
     contract_id: uuid.UUID | None = Field(
-        default=None, foreign_key="contracts.id",
+        default=None,
+        foreign_key="contracts.id",
     )
     document_id: uuid.UUID | None = Field(
-        default=None, foreign_key="documents.id",
+        default=None,
+        foreign_key="documents.id",
     )

@@ -1,8 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.core.config import settings
-
 from app.api.v1.alerts import router as alerts_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.billing import router as billing_router
@@ -16,6 +14,7 @@ from app.api.v1.payments import router as payments_router
 from app.api.v1.registry import router as registry_router
 from app.api.v1.reports import router as reports_router
 from app.api.v1.users import router as users_router
+from app.core.config import settings
 
 # /docs и /openapi.json открыты только если DEBUG=true в .env.
 # В production эти эндпоинты прячутся — это снижает поверхность атаки,

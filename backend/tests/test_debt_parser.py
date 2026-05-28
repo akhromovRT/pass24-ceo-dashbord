@@ -1,11 +1,10 @@
 import os
-import re
 from datetime import date
 from pathlib import Path
 
 import pytest
 
-from app.parser.debt_report import detect_level, parse_debt_report, HierarchyLevel
+from app.parser.debt_report import HierarchyLevel, detect_level, parse_debt_report
 
 DEBT_REPORT_PATH = os.path.expanduser(
     "~/Downloads/_Spreadsheets/"
@@ -58,14 +57,15 @@ class TestDetectLevel:
         assert detect_level("<...>", "") == HierarchyLevel.GROUP_MARKER
 
     def test_correction_dolga_is_document(self):
-        assert detect_level(
-            "Корректировка долга № 112 от 31.12.2025", ""
-        ) == HierarchyLevel.DOCUMENT
+        assert (
+            detect_level("Корректировка долга № 112 от 31.12.2025", "") == HierarchyLevel.DOCUMENT
+        )
 
     def test_correction_realizacii_is_document(self):
-        assert detect_level(
-            "Корректировка реализации № 2 от 01.10.2025", ""
-        ) == HierarchyLevel.DOCUMENT
+        assert (
+            detect_level("Корректировка реализации № 2 от 01.10.2025", "")
+            == HierarchyLevel.DOCUMENT
+        )
 
     def test_dopsoglashenie_with_dot_and_space(self):
         # Все варианты написания «Доп. согл.», «Доп.согл.», «Доп сог.» → CONTRACT.
@@ -80,18 +80,12 @@ class TestDetectLevel:
     def test_bare_contract_with_letter_prefix(self):
         # «0ББП-000045 от 28.03.2023», «Альфа 2021/05-1089/П от 01.07.2021».
         assert detect_level("0ББП-000045 от 28.03.2023", "") == HierarchyLevel.CONTRACT
-        assert detect_level(
-            "Альфа 2021/05-1089/П от 01.07.2021", ""
-        ) == HierarchyLevel.CONTRACT
+        assert detect_level("Альфа 2021/05-1089/П от 01.07.2021", "") == HierarchyLevel.CONTRACT
 
     def test_bare_contract_with_hash(self):
         # «№2025/01-1007/Р от 18.02.2025», «№ 24/02 - 2025 от 25.02.2025».
-        assert detect_level(
-            "№2025/01-1007/Р от 18.02.2025 г.", ""
-        ) == HierarchyLevel.CONTRACT
-        assert detect_level(
-            "№ 24/02 - 2025 от 25.02.2025", ""
-        ) == HierarchyLevel.CONTRACT
+        assert detect_level("№2025/01-1007/Р от 18.02.2025 г.", "") == HierarchyLevel.CONTRACT
+        assert detect_level("№ 24/02 - 2025 от 25.02.2025", "") == HierarchyLevel.CONTRACT
 
     def test_contract_without_date(self):
         # «№2021/03-1055/СКУД» — номер без «от <дата>».
@@ -99,16 +93,17 @@ class TestDetectLevel:
 
     def test_contract_contains_dogovor_word(self):
         # Слово «договор» внутри строки (не только в начале).
-        assert detect_level(
-            "ГРАЖДАНСКО-ПРАВОВОЙ ДОГОВОР (Контракт) № 18-ЗК-24-ХТ СМП от 26.01.2024",
-            "",
-        ) == HierarchyLevel.CONTRACT
+        assert (
+            detect_level(
+                "ГРАЖДАНСКО-ПРАВОВОЙ ДОГОВОР (Контракт) № 18-ЗК-24-ХТ СМП от 26.01.2024",
+                "",
+            )
+            == HierarchyLevel.CONTRACT
+        )
 
     def test_schet_with_lowercase(self):
         # Префиксы CONTRACT теперь сравниваются case-insensitive.
-        assert detect_level(
-            "счет-оферта № 000117 от 28.08.2023", ""
-        ) == HierarchyLevel.CONTRACT
+        assert detect_level("счет-оферта № 000117 от 28.08.2023", "") == HierarchyLevel.CONTRACT
 
     def test_bez_dogovora_is_contract(self):
         # «Без договора» — служебный плейсхолдер 1С для документов без привязки.

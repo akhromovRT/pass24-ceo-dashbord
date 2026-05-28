@@ -1,16 +1,24 @@
 import re
 from datetime import UTC, datetime
 
-from sqlalchemy import func
 from sqlmodel import Session, select
 
 from app.models import (
-    Alert, AlertSeverity, AlertType,
-    Contract, ContractStatus, ContractType,
-    DebtSnapshot, DebtSnapshotLevel, DebtSnapshotRow,
-    Document, DocType,
-    ImportRun, ImportStatus,
-    Organization, OrgStatus,
+    Alert,
+    AlertSeverity,
+    AlertType,
+    Contract,
+    ContractStatus,
+    ContractType,
+    DebtSnapshot,
+    DebtSnapshotLevel,
+    DebtSnapshotRow,
+    DocType,
+    Document,
+    ImportRun,
+    ImportStatus,
+    Organization,
+    OrgStatus,
 )
 from app.parser.bank_statement import BankStatementResult, ParsedPayment, PaymentInfo
 from app.parser.classifier import classify_contract
@@ -52,7 +60,8 @@ def _doc_key(contract_id, doc_type, doc_date, doc_number, amount):
     """Канонический ключ для дедупликации Document.
     Сумма нормализуется до 2 знаков после запятой, чтобы Decimal('7000')
     и Decimal('7000.00') давали один и тот же ключ."""
-    from decimal import Decimal as _D
+    from decimal import Decimal as _D  # noqa: N814
+
     try:
         amt = _D(str(amount or 0))
     except Exception:
@@ -81,20 +90,18 @@ class ImportService:
         Кешируется по contract_id (BLOB queries × 1, не × N документов)."""
         if contract_id not in self._doc_keys_cache:
             rows = self.session.exec(
-                select(Document.doc_type, Document.doc_date,
-                       Document.doc_number, Document.amount)
-                .where(Document.contract_id == contract_id)
+                select(
+                    Document.doc_type, Document.doc_date, Document.doc_number, Document.amount
+                ).where(Document.contract_id == contract_id)
             ).all()
             self._doc_keys_cache[contract_id] = {
-                _doc_key(contract_id, dt, dd, dn, am)
-                for dt, dd, dn, am in rows
+                _doc_key(contract_id, dt, dd, dn, am) for dt, dd, dn, am in rows
             }
         return self._doc_keys_cache[contract_id]
 
     def _add_document(self, doc: Document) -> bool:
         """Идемпотентная вставка Document. True если добавлен, False если дубль."""
-        key = _doc_key(doc.contract_id, doc.doc_type, doc.doc_date,
-                       doc.doc_number, doc.amount)
+        key = _doc_key(doc.contract_id, doc.doc_type, doc.doc_date, doc.doc_number, doc.amount)
         keys = self._existing_doc_keys(doc.contract_id)
         if key in keys:
             self._skipped_dup_documents += 1
@@ -104,12 +111,16 @@ class ImportService:
         return True
 
     def _payment_exists_in_payments_report(
-        self, organization_id, doc_date, amount,
+        self,
+        organization_id,
+        doc_date,
+        amount,
     ) -> bool:
         """True если в documents уже есть PAYMENT с теми же (org, date, amount)
         через synthetic-contract `1C-PAYMENTS` (реестр 1С). Защита от
         cross-source дублей при импорте банк-выписки (ADR-018)."""
         from sqlmodel import select
+
         from app.models import Contract
 
         stmt = (
@@ -188,8 +199,11 @@ class ImportService:
         # Полный срез 1С → DebtSnapshot + DebtSnapshotRow (этап 2).
         # Делаем ДО commit, чтобы всё легло в одной транзакции.
         self._build_debt_snapshot(
-            parse_result, import_run,
-            buyer_to_org, contract_to_db, document_to_db,
+            parse_result,
+            import_run,
+            buyer_to_org,
+            contract_to_db,
+            document_to_db,
             skipped_no_inn=skipped_no_inn,
         )
 
@@ -362,12 +376,14 @@ class ImportService:
             self.session.flush()
             self._new_buyers += 1
 
-            self.session.add(Alert(
-                organization_id=org.id,
-                alert_type=AlertType.UNASSIGNED_CLIENT,
-                severity=AlertSeverity.WARNING,
-                title=f"Новый клиент без менеджера: {cleaned_name}",
-            ))
+            self.session.add(
+                Alert(
+                    organization_id=org.id,
+                    alert_type=AlertType.UNASSIGNED_CLIENT,
+                    severity=AlertSeverity.WARNING,
+                    title=f"Новый клиент без менеджера: {cleaned_name}",
+                )
+            )
         else:
             org.total_debt = buyer.debt_end
             self.session.add(org)
@@ -407,14 +423,17 @@ class ImportService:
     # ---- Bank statement import ----
 
     def process_payments_report(
-        self, result: BankStatementResult, file_hash: str,
+        self,
+        result: BankStatementResult,
+        file_hash: str,
         period_overrides: dict[int, tuple[int, int]] | None = None,
     ) -> ImportRun:
         """Импорт реестра «Оплата от покупателей» из 1С — полная история платежей.
         Документы создаются на синтетическом контракте 1C-PAYMENTS, чтобы леджер
         использовал именно этот источник."""
         return self.process_bank_import(
-            result, file_hash,
+            result,
+            file_hash,
             synthetic_contract=_PAYMENTS_SYNTH_CONTRACT_NUMBER,
             source_label="payments_report",
             period_overrides=period_overrides,
@@ -468,21 +487,25 @@ class ImportService:
             inn = _normalize_inn(p.inn)
             if not inn:
                 skipped_no_inn += 1
-                errors.append({
-                    "type": "no_inn",
-                    "date": str(p.date),
-                    "amount": float(p.amount),
-                    "counterparty": p.counterparty,
-                })
+                errors.append(
+                    {
+                        "type": "no_inn",
+                        "date": str(p.date),
+                        "amount": float(p.amount),
+                        "counterparty": p.counterparty,
+                    }
+                )
                 continue
             if len(inn) not in (10, 12):
-                errors.append({
-                    "type": "invalid_inn_length",
-                    "inn": inn,
-                    "len": len(inn),
-                    "date": str(p.date),
-                    "counterparty": p.counterparty,
-                })
+                errors.append(
+                    {
+                        "type": "invalid_inn_length",
+                        "inn": inn,
+                        "len": len(inn),
+                        "date": str(p.date),
+                        "counterparty": p.counterparty,
+                    }
+                )
                 continue
 
             org = self._find_or_create_org_from_bank(p, inn)
@@ -497,9 +520,7 @@ class ImportService:
             # bank-документ, если в documents уже есть платёж из реестра 1С
             # (payments.xls / 1C-PAYMENTS) с теми же (org, date, amount).
             # Реестр 1С — source of truth, банк — копия.
-            if self._payment_exists_in_payments_report(
-                org.id, p.date, p.amount
-            ):
+            if self._payment_exists_in_payments_report(org.id, p.date, p.amount):
                 self._skipped_dup_documents += 1
                 continue
 
@@ -539,6 +560,7 @@ class ImportService:
 
         # Пересчёт AR-леджера для затронутых клиентов
         from app.services.allocation_service import AllocationService
+
         alloc_svc = AllocationService(self.session)
         for affected_org_id in seen_orgs:
             alloc_svc.recompute_for_organization(affected_org_id)
@@ -547,9 +569,7 @@ class ImportService:
         return import_run
 
     def _find_or_create_org_from_bank(self, p: ParsedPayment, inn: str) -> Organization:
-        org = self.session.exec(
-            select(Organization).where(Organization.inn == inn)
-        ).first()
+        org = self.session.exec(select(Organization).where(Organization.inn == inn)).first()
         if org is not None:
             return org
 
@@ -566,16 +586,17 @@ class ImportService:
         self.session.flush()
         self._new_buyers += 1
 
-        self.session.add(Alert(
-            organization_id=org.id,
-            alert_type=AlertType.UNASSIGNED_CLIENT,
-            severity=AlertSeverity.WARNING,
-            title=f"Новый клиент из банк-выписки: {name}",
-        ))
+        self.session.add(
+            Alert(
+                organization_id=org.id,
+                alert_type=AlertType.UNASSIGNED_CLIENT,
+                severity=AlertSeverity.WARNING,
+                title=f"Новый клиент из банк-выписки: {name}",
+            )
+        )
         return org
 
-    def _get_or_create_synth_contract(self, org: Organization,
-                                      contract_number: str) -> Contract:
+    def _get_or_create_synth_contract(self, org: Organization, contract_number: str) -> Contract:
         existing = self.session.exec(
             select(Contract).where(
                 Contract.organization_id == org.id,
@@ -630,9 +651,7 @@ class ImportService:
 
         for comp in result.companies:
             inn = _normalize_inn(comp.inn)
-            org = self.session.exec(
-                select(Organization).where(Organization.inn == inn)
-            ).first()
+            org = self.session.exec(select(Organization).where(Organization.inn == inn)).first()
             if org is None:
                 org = Organization(
                     inn=inn,
@@ -643,12 +662,14 @@ class ImportService:
                 self.session.flush()
                 self._new_buyers += 1
                 orgs_created += 1
-                self.session.add(Alert(
-                    organization_id=org.id,
-                    alert_type=AlertType.UNASSIGNED_CLIENT,
-                    severity=AlertSeverity.WARNING,
-                    title=f"Новый клиент из реестра: {comp.company_name}",
-                ))
+                self.session.add(
+                    Alert(
+                        organization_id=org.id,
+                        alert_type=AlertType.UNASSIGNED_CLIENT,
+                        severity=AlertSeverity.WARNING,
+                        title=f"Новый клиент из реестра: {comp.company_name}",
+                    )
+                )
 
             org.in_registry = True
             if comp.contract_1c:
@@ -708,7 +729,13 @@ class ImportService:
                     objects_added += 1
                 else:
                     changed = False
-                    for attr in ("cloud_url", "object_number", "object_type", "address", "city_region"):
+                    for attr in (
+                        "cloud_url",
+                        "object_number",
+                        "object_type",
+                        "address",
+                        "city_region",
+                    ):
                         new_val = getattr(parsed_obj, attr)
                         if new_val and getattr(obj, attr) != new_val:
                             setattr(obj, attr, new_val)

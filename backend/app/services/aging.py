@@ -5,6 +5,7 @@
 неоплаченного начисления леджера (АП начисляется 1-го числа месяца).
 Сумма долга берётся из 1С (`Organization.total_debt`), каждый клиент
 попадает ровно в одну корзину."""
+
 from datetime import date
 
 from sqlmodel import Session, func, select
@@ -32,8 +33,10 @@ def ledger_outstanding(session: Session) -> dict:
         .where(Organization.excluded_from_analytics == False)  # noqa: E712
     ).all()
     alloc_rows = session.exec(
-        select(PaymentAllocation.monthly_charge_id,
-               func.coalesce(func.sum(PaymentAllocation.allocated_amount), 0))
+        select(
+            PaymentAllocation.monthly_charge_id,
+            func.coalesce(func.sum(PaymentAllocation.allocated_amount), 0),
+        )
         .where(PaymentAllocation.monthly_charge_id.is_not(None))  # type: ignore[union-attr]
         .group_by(PaymentAllocation.monthly_charge_id)
     ).all()
@@ -65,8 +68,9 @@ def debt_aging(session: Session) -> list[tuple]:
     rows: list[tuple] = []
     for o in debtors:
         periods = outstanding.get(o.id, {})
-        unpaid = [(y, m) for (y, m), left in periods.items()
-                  if left > 0.01 and y * 12 + m <= cur_idx]
+        unpaid = [
+            (y, m) for (y, m), left in periods.items() if left > 0.01 and y * 12 + m <= cur_idx
+        ]
         if unpaid:
             oy, om = min(unpaid)
             age = cur_idx - (oy * 12 + om)

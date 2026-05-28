@@ -13,6 +13,7 @@ counterparty, и привязывает их к организации по ук
         --import-run-id 0a92e084-c713-45c3-82bb-d52214506885
         [--dry-run]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -29,9 +30,13 @@ from sqlmodel import Session, select
 
 from app.core.database import engine
 from app.models import (
-    Contract, ContractStatus, ContractType,
-    Document, DocType,
-    ImportRun, Organization,
+    Contract,
+    ContractStatus,
+    ContractType,
+    DocType,
+    Document,
+    ImportRun,
+    Organization,
 )
 from app.parser.bank_statement import parse_bank_statement
 
@@ -41,9 +46,15 @@ _BANK_SYNTH_CONTRACT_NUMBER = "BANK-IMPORT"
 def main() -> int:
     p = argparse.ArgumentParser(description="Reassign no-INN bank payments to a target org")
     p.add_argument("--file", required=True, help="Path to original bank statement xlsx/xls")
-    p.add_argument("--counterparty-like", required=True, help="Substring to match in counterparty (case-insensitive)")
+    p.add_argument(
+        "--counterparty-like",
+        required=True,
+        help="Substring to match in counterparty (case-insensitive)",
+    )
     p.add_argument("--target-inn", required=True, help="Target organization INN")
-    p.add_argument("--import-run-id", required=True, help="Original ImportRun UUID to attach payments to")
+    p.add_argument(
+        "--import-run-id", required=True, help="Original ImportRun UUID to attach payments to"
+    )
     p.add_argument("--dry-run", action="store_true", help="Show what would be done without writing")
     args = p.parse_args()
 
@@ -52,13 +63,16 @@ def main() -> int:
     pattern = args.counterparty_like.upper()
 
     candidates = [
-        pp for pp in result.payments
-        if not (pp.inn or "").strip()
-        and pattern in (pp.counterparty or "").upper()
+        pp
+        for pp in result.payments
+        if not (pp.inn or "").strip() and pattern in (pp.counterparty or "").upper()
     ]
 
     if not candidates:
-        print(f"No no-INN payments matching counterparty contains '{args.counterparty_like}'", file=sys.stderr)
+        print(
+            f"No no-INN payments matching counterparty contains '{args.counterparty_like}'",
+            file=sys.stderr,
+        )
         return 1
 
     print(f"Found {len(candidates)} no-INN payments matching '{args.counterparty_like}':")
@@ -77,7 +91,7 @@ def main() -> int:
         try:
             run_uuid = uuid.UUID(args.import_run_id)
         except ValueError:
-            print(f"ERROR: invalid import-run-id UUID", file=sys.stderr)
+            print("ERROR: invalid import-run-id UUID", file=sys.stderr)
             return 2
 
         import_run = session.get(ImportRun, run_uuid)
@@ -119,7 +133,9 @@ def main() -> int:
                 period_year=pp.payment_info.period_year if pp.payment_info else None,
                 period_month=pp.payment_info.period_month if pp.payment_info else None,
                 import_run_id=import_run.id,
-                raw_name=(pp.description or f"Reassigned no-INN payment, counterparty: {pp.counterparty}")[:500],
+                raw_name=(
+                    pp.description or f"Reassigned no-INN payment, counterparty: {pp.counterparty}"
+                )[:500],
             )
             if not args.dry_run:
                 session.add(doc)
@@ -131,9 +147,8 @@ def main() -> int:
             # Decrease errors[] entries with matching counterparty + same date+amount
             new_errors = []
             removed = 0
-            for e in (import_run.errors or []):
-                if (e.get("type") == "no_inn"
-                    and pattern in (e.get("counterparty") or "").upper()):
+            for e in import_run.errors or []:
+                if e.get("type") == "no_inn" and pattern in (e.get("counterparty") or "").upper():
                     removed += 1
                     continue
                 new_errors.append(e)
@@ -148,7 +163,9 @@ def main() -> int:
                 import_run.delta_summary = ds
             session.add(import_run)
             session.commit()
-            print(f"\nOK: reassigned {created} payment(s). Removed {removed} error(s) from ImportRun.")
+            print(
+                f"\nOK: reassigned {created} payment(s). Removed {removed} error(s) from ImportRun."
+            )
         else:
             print(f"\n[DRY-RUN] Would reassign {created} payment(s).")
 

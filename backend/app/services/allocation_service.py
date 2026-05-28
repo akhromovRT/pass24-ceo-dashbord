@@ -1,4 +1,5 @@
 """Разнесение платежей по месячным начислениям (детерминированный пересчёт)."""
+
 import logging
 from datetime import date
 from decimal import Decimal
@@ -27,11 +28,13 @@ class AllocationService:
         self.session = session
 
     def _charges(self, org_id) -> list[MonthlyCharge]:
-        return list(self.session.exec(
-            select(MonthlyCharge)
-            .where(MonthlyCharge.organization_id == org_id)
-            .order_by(MonthlyCharge.year, MonthlyCharge.month)
-        ).all())
+        return list(
+            self.session.exec(
+                select(MonthlyCharge)
+                .where(MonthlyCharge.organization_id == org_id)
+                .order_by(MonthlyCharge.year, MonthlyCharge.month)
+            ).all()
+        )
 
     def _payments(self, org_id) -> list[Document]:
         """Платежи клиента из реестра «Оплата от покупателей» (синтетический
@@ -40,24 +43,26 @@ class AllocationService:
         rows = self.session.exec(
             select(Document)
             .join(Contract, Contract.id == Document.contract_id)
-            .where(Document.organization_id == org_id,
-                   Document.doc_type == DocType.PAYMENT,
-                   Document.amount > 0,
-                   Contract.contract_number == _PAYMENTS_CONTRACT)
+            .where(
+                Document.organization_id == org_id,
+                Document.doc_type == DocType.PAYMENT,
+                Document.amount > 0,
+                Contract.contract_number == _PAYMENTS_CONTRACT,
+            )
         ).all()
         result = []
         for d in rows:
             ep = extract_periods(d.raw_name or "", d.doc_date or date.today())
             if ep.payment_kind != "other":
                 result.append(d)
-        return sorted(result, key=lambda d: (d.doc_date or date.min,
-                                             d.doc_number or "", str(d.id)))
+        return sorted(result, key=lambda d: (d.doc_date or date.min, d.doc_number or "", str(d.id)))
 
     def _manual_for_payment(self, payment_id) -> Decimal:
         rows = self.session.exec(
             select(PaymentAllocation).where(
                 PaymentAllocation.payment_document_id == payment_id,
-                PaymentAllocation.is_manual == True)  # noqa: E712
+                PaymentAllocation.is_manual == True,
+            )  # noqa: E712
         ).all()
         return sum((a.allocated_amount for a in rows), Decimal("0"))
 
@@ -78,9 +83,9 @@ class AllocationService:
         outstanding: dict = {}
         for c in charges:
             manual = self.session.exec(
-                select(PaymentAllocation)
-                .where(PaymentAllocation.monthly_charge_id == c.id,
-                       PaymentAllocation.is_manual == True)  # noqa: E712
+                select(PaymentAllocation).where(
+                    PaymentAllocation.monthly_charge_id == c.id, PaymentAllocation.is_manual == True
+                )  # noqa: E712
             ).all()
             used = sum((a.allocated_amount for a in manual), Decimal("0"))
             outstanding[c.id] = (c, c.amount - used)
@@ -90,8 +95,7 @@ class AllocationService:
             if remaining <= 0:
                 continue
 
-            ep = extract_periods(payment.raw_name or "",
-                                 payment.doc_date or date.today())
+            ep = extract_periods(payment.raw_name or "", payment.doc_date or date.today())
 
             # Ручной ввод приоритетнее regex-результата
             if payment.period_manual and payment.period_year and payment.period_month:
@@ -108,7 +112,7 @@ class AllocationService:
 
             # 1. явные периоды из назначения
             charge_by_period = {(c.year, c.month): c for c in charges}
-            for (py, pm) in ep.periods:
+            for py, pm in ep.periods:
                 if remaining <= 0:
                     break
                 c = charge_by_period.get((py, pm))
@@ -118,10 +122,14 @@ class AllocationService:
                 if left <= 0:
                     continue
                 take = min(remaining, left)
-                self.session.add(PaymentAllocation(
-                    payment_document_id=payment.id, monthly_charge_id=c.id,
-                    allocated_amount=take, basis=AllocationBasis.EXPLICIT_PERIOD,
-                ))
+                self.session.add(
+                    PaymentAllocation(
+                        payment_document_id=payment.id,
+                        monthly_charge_id=c.id,
+                        allocated_amount=take,
+                        basis=AllocationBasis.EXPLICIT_PERIOD,
+                    )
+                )
                 outstanding[c.id] = (c, left - take)
                 remaining -= take
 
@@ -130,19 +138,23 @@ class AllocationService:
 
             # 3. аванс в будущие начисления
             if remaining > 0:
-                remaining = self._spill_advance(org_id, payment, remaining,
-                                                outstanding, charges)
+                remaining = self._spill_advance(org_id, payment, remaining, outstanding, charges)
 
             # 4. нераспознанный остаток
             if remaining > 0:
-                self.session.add(PaymentAllocation(
-                    payment_document_id=payment.id, monthly_charge_id=None,
-                    allocated_amount=remaining, basis=AllocationBasis.ADVANCE,
-                ))
+                self.session.add(
+                    PaymentAllocation(
+                        payment_document_id=payment.id,
+                        monthly_charge_id=None,
+                        allocated_amount=remaining,
+                        basis=AllocationBasis.ADVANCE,
+                    )
+                )
         self.session.flush()
 
-    def _fifo(self, payment, remaining: Decimal, outstanding: dict,
-              charges: list[MonthlyCharge]) -> Decimal:
+    def _fifo(
+        self, payment, remaining: Decimal, outstanding: dict, charges: list[MonthlyCharge]
+    ) -> Decimal:
         for c in charges:
             if remaining <= 0:
                 break
@@ -150,18 +162,24 @@ class AllocationService:
             if left <= 0:
                 continue
             take = min(remaining, left)
-            self.session.add(PaymentAllocation(
-                payment_document_id=payment.id, monthly_charge_id=c.id,
-                allocated_amount=take, basis=AllocationBasis.FIFO,
-            ))
+            self.session.add(
+                PaymentAllocation(
+                    payment_document_id=payment.id,
+                    monthly_charge_id=c.id,
+                    allocated_amount=take,
+                    basis=AllocationBasis.FIFO,
+                )
+            )
             outstanding[c.id] = (c, left - take)
             remaining -= take
         return remaining
 
-    def _spill_advance(self, org_id, payment, remaining: Decimal,
-                       outstanding: dict, charges: list[MonthlyCharge]) -> Decimal:
+    def _spill_advance(
+        self, org_id, payment, remaining: Decimal, outstanding: dict, charges: list[MonthlyCharge]
+    ) -> Decimal:
         """Остаток уходит авансом в синтетические будущие начисления."""
         from app.services.charge_service import ChargeService
+
         last = max(((c.year, c.month) for c in charges), default=None)
         if last is None:
             return remaining
@@ -175,16 +193,25 @@ class AllocationService:
             tariff = ChargeService(self.session)._tariff_for(org_id, y, m)
             if tariff <= 0:
                 break
-            charge = MonthlyCharge(organization_id=org_id, year=y, month=m,
-                                   amount=tariff, source=ChargeSource.SYNTHETIC_TARIFF)
+            charge = MonthlyCharge(
+                organization_id=org_id,
+                year=y,
+                month=m,
+                amount=tariff,
+                source=ChargeSource.SYNTHETIC_TARIFF,
+            )
             self.session.add(charge)
             self.session.flush()
             charges.append(charge)
             take = min(remaining, tariff)
-            self.session.add(PaymentAllocation(
-                payment_document_id=payment.id, monthly_charge_id=charge.id,
-                allocated_amount=take, basis=AllocationBasis.ADVANCE,
-            ))
+            self.session.add(
+                PaymentAllocation(
+                    payment_document_id=payment.id,
+                    monthly_charge_id=charge.id,
+                    allocated_amount=take,
+                    basis=AllocationBasis.ADVANCE,
+                )
+            )
             outstanding[charge.id] = (charge, tariff - take)
             remaining -= take
         return remaining

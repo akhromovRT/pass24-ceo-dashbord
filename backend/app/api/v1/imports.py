@@ -35,15 +35,11 @@ def upload_file(
     content = file.file.read()
     file_hash = hashlib.sha256(content).hexdigest()
 
-    existing = session.exec(
-        select(ImportRun).where(ImportRun.file_hash == file_hash)
-    ).first()
+    existing = session.exec(select(ImportRun).where(ImportRun.file_hash == file_hash)).first()
     if existing:
         raise HTTPException(status_code=409, detail="File already imported")
 
-    with tempfile.NamedTemporaryFile(
-        suffix=Path(file.filename).suffix, delete=False
-    ) as tmp:
+    with tempfile.NamedTemporaryFile(suffix=Path(file.filename).suffix, delete=False) as tmp:
         tmp.write(content)
         tmp_path = tmp.name
 
@@ -85,7 +81,6 @@ def upload_file(
     return import_run
 
 
-
 @router.post("/preview")
 def preview_import(
     file: UploadFile,
@@ -99,9 +94,7 @@ def preview_import(
     content = file.file.read()
     file_hash = hashlib.sha256(content).hexdigest()
 
-    existing = session.exec(
-        select(ImportRun).where(ImportRun.file_hash == file_hash)
-    ).first()
+    existing = session.exec(select(ImportRun).where(ImportRun.file_hash == file_hash)).first()
     if existing:
         raise HTTPException(status_code=409, detail="File already imported")
 
@@ -131,15 +124,17 @@ def preview_import(
         else:
             detected = None
         if detected is None:
-            payments_without_period.append({
-                "index": idx,
-                "date": str(p.date),
-                "amount": float(p.amount),
-                "counterparty": p.counterparty,
-                "inn": p.inn,
-                "description": p.description,
-                "detected_period": None,
-            })
+            payments_without_period.append(
+                {
+                    "index": idx,
+                    "date": str(p.date),
+                    "amount": float(p.amount),
+                    "counterparty": p.counterparty,
+                    "inn": p.inn,
+                    "description": p.description,
+                    "detected_period": None,
+                }
+            )
 
     return {
         "file_hash": file_hash,
@@ -170,9 +165,7 @@ def commit_import(
     if actual_hash != file_hash:
         raise HTTPException(status_code=400, detail="file_hash mismatch — файл изменился")
 
-    existing = session.exec(
-        select(ImportRun).where(ImportRun.file_hash == actual_hash)
-    ).first()
+    existing = session.exec(select(ImportRun).where(ImportRun.file_hash == actual_hash)).first()
     if existing:
         raise HTTPException(status_code=409, detail="File already imported")
 
@@ -220,7 +213,5 @@ def commit_import(
 
 @router.get("/runs")
 def list_import_runs(session: Session = Depends(get_session)):
-    runs = session.exec(
-        select(ImportRun).order_by(ImportRun.started_at.desc())
-    ).all()
+    runs = session.exec(select(ImportRun).order_by(ImportRun.started_at.desc())).all()
     return runs

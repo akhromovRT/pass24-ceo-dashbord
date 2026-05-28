@@ -1,4 +1,3 @@
-import pytest
 from sqlmodel import Session, select
 
 from app.models import Alert, ClientObject, Organization, OrgStatus
@@ -35,10 +34,18 @@ def _result(companies, skipped=None, total=None):
 class TestRegistryImport:
     def test_marks_existing_org_in_registry(self, db_session: Session):
         org = Organization(inn="7703746155", name_1c="ОНВИ Сервис", in_registry=False)
-        db_session.add(org); db_session.commit()
+        db_session.add(org)
+        db_session.commit()
 
-        result = _result([_make_company("7703746155", "ОНВИ Сервис",
-            objects=[_make_object("Офис", cloud_url="https://onvi.pass24online.ru")])])
+        result = _result(
+            [
+                _make_company(
+                    "7703746155",
+                    "ОНВИ Сервис",
+                    objects=[_make_object("Офис", cloud_url="https://onvi.pass24online.ru")],
+                )
+            ]
+        )
 
         run = ImportService(db_session).process_registry_import(result, file_hash="abc")
         db_session.refresh(org)
@@ -49,8 +56,9 @@ class TestRegistryImport:
         assert run.delta_summary["objects_added"] == 1
 
     def test_creates_new_org_as_prospect(self, db_session: Session):
-        result = _result([_make_company("1234567890", "Новая Компания ООО",
-            objects=[_make_object("Объект 1")])])
+        result = _result(
+            [_make_company("1234567890", "Новая Компания ООО", objects=[_make_object("Объект 1")])]
+        )
         run = ImportService(db_session).process_registry_import(result, file_hash="abc")
         org = db_session.exec(select(Organization).where(Organization.inn == "1234567890")).first()
         assert org is not None
@@ -59,11 +67,18 @@ class TestRegistryImport:
         assert run.new_buyers == 1
 
     def test_transfers_contract_and_active_doc(self, db_session: Session):
-        result = _result([_make_company("1234567890", "Test",
-            contract_1c="Договор № 1 от 01.01.2024",
-            active_doc="ДС № 2 от 01.06.2025",
-            objects_count_declared=3,
-            objects=[_make_object("X")])])
+        result = _result(
+            [
+                _make_company(
+                    "1234567890",
+                    "Test",
+                    contract_1c="Договор № 1 от 01.01.2024",
+                    active_doc="ДС № 2 от 01.06.2025",
+                    objects_count_declared=3,
+                    objects=[_make_object("X")],
+                )
+            ]
+        )
         ImportService(db_session).process_registry_import(result, file_hash="abc")
         org = db_session.exec(select(Organization).where(Organization.inn == "1234567890")).first()
         assert org.contract_1c_raw == "Договор № 1 от 01.01.2024"
@@ -71,27 +86,50 @@ class TestRegistryImport:
         assert org.objects_count_declared == 3
 
     def test_multiple_objects_for_same_company(self, db_session: Session):
-        result = _result([_make_company("1234567890", "ПИК-КОМФОРТ",
-            objects=[
-                _make_object("ЖК Вавилова 4", cloud_url="https://vavilova4.pass24online.ru"),
-                _make_object("ЖК Вандер Парк", cloud_url="https://vanderpark.pass24online.ru"),
-            ])])
+        result = _result(
+            [
+                _make_company(
+                    "1234567890",
+                    "ПИК-КОМФОРТ",
+                    objects=[
+                        _make_object(
+                            "ЖК Вавилова 4", cloud_url="https://vavilova4.pass24online.ru"
+                        ),
+                        _make_object(
+                            "ЖК Вандер Парк", cloud_url="https://vanderpark.pass24online.ru"
+                        ),
+                    ],
+                )
+            ]
+        )
         ImportService(db_session).process_registry_import(result, file_hash="abc")
         org = db_session.exec(select(Organization).where(Organization.inn == "1234567890")).first()
-        objects = db_session.exec(select(ClientObject).where(ClientObject.organization_id == org.id)).all()
+        objects = db_session.exec(
+            select(ClientObject).where(ClientObject.organization_id == org.id)
+        ).all()
         assert len(objects) == 2
         names = {o.name for o in objects}
         assert names == {"ЖК Вавилова 4", "ЖК Вандер Парк"}
 
     def test_idempotent_object_upsert(self, db_session: Session):
         # First import
-        result = _result([_make_company("1234567890", "X",
-            objects=[_make_object("Obj1", cloud_url="https://a.com")])])
+        result = _result(
+            [
+                _make_company(
+                    "1234567890", "X", objects=[_make_object("Obj1", cloud_url="https://a.com")]
+                )
+            ]
+        )
         ImportService(db_session).process_registry_import(result, file_hash="hash1")
 
         # Second import: same name, different cloud_url → should update, not add
-        result2 = _result([_make_company("1234567890", "X",
-            objects=[_make_object("Obj1", cloud_url="https://b.com")])])
+        result2 = _result(
+            [
+                _make_company(
+                    "1234567890", "X", objects=[_make_object("Obj1", cloud_url="https://b.com")]
+                )
+            ]
+        )
         run = ImportService(db_session).process_registry_import(result2, file_hash="hash2")
 
         objects = db_session.exec(select(ClientObject)).all()
@@ -102,10 +140,16 @@ class TestRegistryImport:
     def test_existing_org_fields_filled_only_when_empty(self, db_session: Session):
         # Org already has cloud_url — registry should NOT overwrite
         org = Organization(inn="7703746155", name_1c="X", cloud_url="https://old.com")
-        db_session.add(org); db_session.commit()
+        db_session.add(org)
+        db_session.commit()
 
-        result = _result([_make_company("7703746155", "X",
-            objects=[_make_object("Y", cloud_url="https://new.com")])])
+        result = _result(
+            [
+                _make_company(
+                    "7703746155", "X", objects=[_make_object("Y", cloud_url="https://new.com")]
+                )
+            ]
+        )
         ImportService(db_session).process_registry_import(result, file_hash="abc")
         db_session.refresh(org)
         assert org.cloud_url == "https://old.com"  # not overwritten
@@ -128,9 +172,15 @@ class TestRegistryImport:
     def test_skipped_no_inn_recorded_in_errors(self, db_session: Session):
         result = _result(
             companies=[_make_company("1234567890", "OK", objects=[_make_object("X")])],
-            skipped=[{"row": 5, "company": "Расторгнутые клиенты"}, {"row": 10, "company": "Лицензии"}],
+            skipped=[
+                {"row": 5, "company": "Расторгнутые клиенты"},
+                {"row": 10, "company": "Лицензии"},
+            ],
             total=3,
         )
         run = ImportService(db_session).process_registry_import(result, file_hash="abc")
         assert run.delta_summary["skipped_no_inn"] == 2
-        assert run.errors == [{"row": 5, "company": "Расторгнутые клиенты"}, {"row": 10, "company": "Лицензии"}]
+        assert run.errors == [
+            {"row": 5, "company": "Расторгнутые клиенты"},
+            {"row": 10, "company": "Лицензии"},
+        ]

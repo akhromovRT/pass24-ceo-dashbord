@@ -30,7 +30,8 @@ class DebtorWorkflow(SQLModel, table=True):
     __tablename__ = "debtor_workflow"
 
     organization_id: uuid.UUID = Field(
-        foreign_key="organizations.id", primary_key=True,
+        foreign_key="organizations.id",
+        primary_key=True,
     )
     status: DebtorWorkflowStatus = Field(default=DebtorWorkflowStatus.NOT_STARTED)
     comment: str | None = None

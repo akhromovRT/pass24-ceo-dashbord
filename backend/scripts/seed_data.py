@@ -7,15 +7,14 @@ Usage:
 from __future__ import annotations
 
 import sys
-from decimal import Decimal
 from pathlib import Path
 
 from sqlmodel import Session, create_engine, select
 
 from app.core.config import settings
 from app.core.security import get_password_hash
-from app.models.contract import Contract, ContractStatus, ContractType
-from app.models.organization import OrgStatus, Organization
+from app.models.contract import Contract, ContractStatus
+from app.models.organization import Organization, OrgStatus
 from app.models.snapshot import MonthlySnapshot
 from app.models.user import User, UserRole
 from app.parser.analytics_migration import parse_analytics
@@ -37,9 +36,7 @@ STATUS_MAP = {
 
 
 def create_admin(session: Session) -> User:
-    existing = session.exec(
-        select(User).where(User.email == "admin@onvi-service.ru")
-    ).first()
+    existing = session.exec(select(User).where(User.email == "admin@onvi-service.ru")).first()
     if existing:
         print(f"Admin already exists: {existing.email}")
         return existing
@@ -70,9 +67,7 @@ def import_analytics(session: Session, file_path: Path) -> None:
     snapshots_created = 0
 
     for row in rows:
-        org = session.exec(
-            select(Organization).where(Organization.inn == row.inn)
-        ).first()
+        org = session.exec(select(Organization).where(Organization.inn == row.inn)).first()
 
         if org is None:
             org = Organization(

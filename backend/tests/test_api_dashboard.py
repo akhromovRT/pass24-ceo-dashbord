@@ -33,8 +33,9 @@ def client(db_session: Session):
         yield db_session
 
     def override_get_current_user():
-        return User(name="T", email="t@t.ru", hashed_password="x",
-                    role=UserRole.ADMIN, is_active=True)
+        return User(
+            name="T", email="t@t.ru", hashed_password="x", role=UserRole.ADMIN, is_active=True
+        )
 
     app.dependency_overrides[get_session] = override_get_session
     app.dependency_overrides[get_current_user] = override_get_current_user
@@ -44,27 +45,45 @@ def client(db_session: Session):
 
 def _make_ledger_org(db_session: Session) -> Organization:
     """Орг с начислением 01/2026 (10000) и платежом 8000, разнесённым на него."""
-    org = Organization(inn="7700000001", name_1c="Орг", status=OrgStatus.ACTIVE,
-                        monthly_ap=Decimal("10000"), total_debt=Decimal("2000"))
+    org = Organization(
+        inn="7700000001",
+        name_1c="Орг",
+        status=OrgStatus.ACTIVE,
+        monthly_ap=Decimal("10000"),
+        total_debt=Decimal("2000"),
+    )
     db_session.add(org)
     db_session.flush()
-    contract = Contract(organization_id=org.id, contract_number="1C-PAYMENTS",
-                        raw_name="payments")
+    contract = Contract(organization_id=org.id, contract_number="1C-PAYMENTS", raw_name="payments")
     db_session.add(contract)
     db_session.flush()
-    charge = MonthlyCharge(organization_id=org.id, year=2026, month=1,
-                           amount=Decimal("10000"),
-                           source=ChargeSource.SYNTHETIC_TARIFF)
+    charge = MonthlyCharge(
+        organization_id=org.id,
+        year=2026,
+        month=1,
+        amount=Decimal("10000"),
+        source=ChargeSource.SYNTHETIC_TARIFF,
+    )
     db_session.add(charge)
     db_session.flush()
-    pay = Document(contract_id=contract.id, organization_id=org.id,
-                   doc_type=DocType.PAYMENT, amount=Decimal("8000"),
-                   doc_date=date(2026, 1, 20), raw_name="оплата")
+    pay = Document(
+        contract_id=contract.id,
+        organization_id=org.id,
+        doc_type=DocType.PAYMENT,
+        amount=Decimal("8000"),
+        doc_date=date(2026, 1, 20),
+        raw_name="оплата",
+    )
     db_session.add(pay)
     db_session.flush()
-    db_session.add(PaymentAllocation(
-        payment_document_id=pay.id, monthly_charge_id=charge.id,
-        allocated_amount=Decimal("8000"), basis=AllocationBasis.FIFO))
+    db_session.add(
+        PaymentAllocation(
+            payment_document_id=pay.id,
+            monthly_charge_id=charge.id,
+            allocated_amount=Decimal("8000"),
+            basis=AllocationBasis.FIFO,
+        )
+    )
     db_session.commit()
     return org
 
@@ -93,8 +112,15 @@ def test_cash_inflow_structure(client, db_session: Session):
     assert resp.status_code == 200
     rows = resp.json()
     assert rows
-    for key in ("year", "month", "current", "advance", "arrears",
-                "undetermined", "non_subscription"):
+    for key in (
+        "year",
+        "month",
+        "current",
+        "advance",
+        "arrears",
+        "undetermined",
+        "non_subscription",
+    ):
         assert key in rows[0]
 
 
@@ -115,14 +141,24 @@ def test_aging_buckets_non_overlapping(client, db_session: Session):
     """Каждый клиент-должник попадает ровно в одну корзину."""
     _make_ledger_org(db_session)  # → корзина 90+
     today = date.today()
-    org2 = Organization(inn="7700000099", name_1c="Свежий долг",
-                        status=OrgStatus.ACTIVE, monthly_ap=Decimal("10000"),
-                        total_debt=Decimal("5000"))
+    org2 = Organization(
+        inn="7700000099",
+        name_1c="Свежий долг",
+        status=OrgStatus.ACTIVE,
+        monthly_ap=Decimal("10000"),
+        total_debt=Decimal("5000"),
+    )
     db_session.add(org2)
     db_session.flush()
-    db_session.add(MonthlyCharge(
-        organization_id=org2.id, year=today.year, month=today.month,
-        amount=Decimal("10000"), source=ChargeSource.SYNTHETIC_TARIFF))
+    db_session.add(
+        MonthlyCharge(
+            organization_id=org2.id,
+            year=today.year,
+            month=today.month,
+            amount=Decimal("10000"),
+            source=ChargeSource.SYNTHETIC_TARIFF,
+        )
+    )
     db_session.commit()
     rows = client.get("/api/v1/dashboard/aging").json()
     assert sum(r["count"] for r in rows) == 2  # 2 должника, без двойного счёта
@@ -136,10 +172,15 @@ def test_summary_has_current_month_fields(client, db_session: Session):
     resp = client.get("/api/v1/dashboard/summary")
     assert resp.status_code == 200
     body = resp.json()
-    for key in ("current_month_label", "current_month_collected",
-                "days_passed", "days_in_month",
-                "debt_90plus_amount", "debt_90plus_share",
-                "collection_rate_fact"):
+    for key in (
+        "current_month_label",
+        "current_month_collected",
+        "days_passed",
+        "days_in_month",
+        "debt_90plus_amount",
+        "debt_90plus_share",
+        "collection_rate_fact",
+    ):
         assert key in body
     assert 1 <= body["days_in_month"] <= 31
 
@@ -148,9 +189,13 @@ def test_summary_client_base_metrics(client, db_session: Session):
     """summary отдаёт метрики клиентской базы (новые плательщики, отток, churn)."""
     _make_ledger_org(db_session)
     body = client.get("/api/v1/dashboard/summary").json()
-    for key in ("new_paid_prev_month", "new_paid_curr_month",
-                "new_paid_curr_year",
-                "stopped_since_year_start", "churn_rate"):
+    for key in (
+        "new_paid_prev_month",
+        "new_paid_curr_month",
+        "new_paid_curr_year",
+        "stopped_since_year_start",
+        "churn_rate",
+    ):
         assert key in body
 
 
@@ -159,17 +204,35 @@ def test_attention_aggregates_open_alerts(client, db_session: Session):
     db_session.add(org)
     db_session.commit()
     db_session.refresh(org)
-    db_session.add(Alert(
-        organization_id=org.id, alert_type=AlertType.LARGE_DEBT,
-        severity=AlertSeverity.CRITICAL, title="Долг", status=AlertStatus.OPEN,
-        metric_value=500000.0))
-    db_session.add(Alert(
-        organization_id=org.id, alert_type=AlertType.LARGE_DEBT,
-        severity=AlertSeverity.CRITICAL, title="Долг2", status=AlertStatus.OPEN,
-        metric_value=300000.0))
-    db_session.add(Alert(
-        organization_id=org.id, alert_type=AlertType.NEW_CLIENT,
-        severity=AlertSeverity.INFO, title="Новый", status=AlertStatus.RESOLVED))
+    db_session.add(
+        Alert(
+            organization_id=org.id,
+            alert_type=AlertType.LARGE_DEBT,
+            severity=AlertSeverity.CRITICAL,
+            title="Долг",
+            status=AlertStatus.OPEN,
+            metric_value=500000.0,
+        )
+    )
+    db_session.add(
+        Alert(
+            organization_id=org.id,
+            alert_type=AlertType.LARGE_DEBT,
+            severity=AlertSeverity.CRITICAL,
+            title="Долг2",
+            status=AlertStatus.OPEN,
+            metric_value=300000.0,
+        )
+    )
+    db_session.add(
+        Alert(
+            organization_id=org.id,
+            alert_type=AlertType.NEW_CLIENT,
+            severity=AlertSeverity.INFO,
+            title="Новый",
+            status=AlertStatus.RESOLVED,
+        )
+    )
     db_session.commit()
     resp = client.get("/api/v1/dashboard/attention")
     assert resp.status_code == 200

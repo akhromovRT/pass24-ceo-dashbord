@@ -1,13 +1,20 @@
 """Unit-тесты builder'а composition по каждой метрике."""
+
 from datetime import date, timedelta
 from decimal import Decimal
 
-import pytest
 from sqlmodel import Session
 
 from app.models import (
-    AllocationBasis, ChargeSource, Contract, ContractType,
-    DocType, Document, MonthlyCharge, Organization, OrgStatus,
+    AllocationBasis,
+    ChargeSource,
+    Contract,
+    ContractType,
+    DocType,
+    Document,
+    MonthlyCharge,
+    Organization,
+    OrgStatus,
     PaymentAllocation,
 )
 from app.services.composition_service import (
@@ -26,9 +33,13 @@ def _org(session, inn, name="Org", **kw):
 
 
 def _charge(session, org, year, month, amount):
-    c = MonthlyCharge(organization_id=org.id, year=year, month=month,
-                      amount=Decimal(str(amount)),
-                      source=ChargeSource.SYNTHETIC_TARIFF)
+    c = MonthlyCharge(
+        organization_id=org.id,
+        year=year,
+        month=month,
+        amount=Decimal(str(amount)),
+        source=ChargeSource.SYNTHETIC_TARIFF,
+    )
     session.add(c)
     session.commit()
     session.refresh(c)
@@ -36,21 +47,26 @@ def _charge(session, org, year, month, amount):
 
 
 def _pay(session, org, charge, amount, pay_date):
-    contract = Contract(organization_id=org.id,
-                        contract_type=ContractType.SUBSCRIPTION)
+    contract = Contract(organization_id=org.id, contract_type=ContractType.SUBSCRIPTION)
     session.add(contract)
     session.commit()
     session.refresh(contract)
-    doc = Document(contract_id=contract.id, organization_id=org.id,
-                   doc_type=DocType.PAYMENT, doc_date=pay_date,
-                   amount=Decimal(str(amount)))
+    doc = Document(
+        contract_id=contract.id,
+        organization_id=org.id,
+        doc_type=DocType.PAYMENT,
+        doc_date=pay_date,
+        amount=Decimal(str(amount)),
+    )
     session.add(doc)
     session.commit()
     session.refresh(doc)
-    alloc = PaymentAllocation(payment_document_id=doc.id,
-                              monthly_charge_id=charge.id,
-                              allocated_amount=Decimal(str(amount)),
-                              basis=AllocationBasis.EXPLICIT_PERIOD)
+    alloc = PaymentAllocation(
+        payment_document_id=doc.id,
+        monthly_charge_id=charge.id,
+        allocated_amount=Decimal(str(amount)),
+        basis=AllocationBasis.EXPLICIT_PERIOD,
+    )
     session.add(alloc)
     session.commit()
 
@@ -59,10 +75,8 @@ def _pay(session, org, charge, amount, pay_date):
 
 
 def test_mrr_fact_lists_contributors_with_amounts(db_session: Session):
-    a = _org(db_session, "10", name="A", status=OrgStatus.ACTIVE,
-             monthly_ap=Decimal("10000"))
-    b = _org(db_session, "11", name="B", status=OrgStatus.ACTIVE,
-             monthly_ap=Decimal("5000"))
+    a = _org(db_session, "10", name="A", status=OrgStatus.ACTIVE, monthly_ap=Decimal("10000"))
+    b = _org(db_session, "11", name="B", status=OrgStatus.ACTIVE, monthly_ap=Decimal("5000"))
     ch_a = _charge(db_session, a, 2026, 4, 10000)
     ch_b = _charge(db_session, b, 2026, 4, 5000)
     _pay(db_session, a, ch_a, 10000, date(2026, 4, 5))
@@ -80,10 +94,14 @@ def test_mrr_fact_lists_contributors_with_amounts(db_session: Session):
 
 
 def test_mrr_fact_excludes_excluded_from_analytics(db_session: Session):
-    a = _org(db_session, "20", status=OrgStatus.ACTIVE,
-             monthly_ap=Decimal("10000"))
-    b = _org(db_session, "21", status=OrgStatus.ACTIVE,
-             monthly_ap=Decimal("5000"), excluded_from_analytics=True)
+    a = _org(db_session, "20", status=OrgStatus.ACTIVE, monthly_ap=Decimal("10000"))
+    b = _org(
+        db_session,
+        "21",
+        status=OrgStatus.ACTIVE,
+        monthly_ap=Decimal("5000"),
+        excluded_from_analytics=True,
+    )
     ch_a = _charge(db_session, a, 2026, 4, 10000)
     ch_b = _charge(db_session, b, 2026, 4, 5000)
     _pay(db_session, a, ch_a, 10000, date(2026, 4, 5))
@@ -100,17 +118,23 @@ def test_mrr_fact_empty_for_invalid_period(db_session: Session):
 
 
 def test_mrr_fact_includes_excluded_when_flag_set(db_session: Session):
-    a = _org(db_session, "150", name="A-normal", status=OrgStatus.ACTIVE,
-             monthly_ap=Decimal("10000"))
-    b = _org(db_session, "151", name="B-excluded", status=OrgStatus.ACTIVE,
-             monthly_ap=Decimal("5000"), excluded_from_analytics=True)
+    a = _org(
+        db_session, "150", name="A-normal", status=OrgStatus.ACTIVE, monthly_ap=Decimal("10000")
+    )
+    b = _org(
+        db_session,
+        "151",
+        name="B-excluded",
+        status=OrgStatus.ACTIVE,
+        monthly_ap=Decimal("5000"),
+        excluded_from_analytics=True,
+    )
     ch_a = _charge(db_session, a, 2026, 4, 10000)
     ch_b = _charge(db_session, b, 2026, 4, 5000)
     _pay(db_session, a, ch_a, 10000, date(2026, 4, 5))
     _pay(db_session, b, ch_b, 5000, date(2026, 4, 7))
 
-    criteria = ReportCriteria(metric="mrr_fact", period="2026-04",
-                              include_excluded=True)
+    criteria = ReportCriteria(metric="mrr_fact", period="2026-04", include_excluded=True)
     rows = build_composition_report(db_session, criteria)
     assert {r["name"] for r in rows} == {"A-normal", "B-excluded"}
     assert control_value_for("mrr_fact", rows) == 15000.0
@@ -120,14 +144,14 @@ def test_mrr_fact_includes_excluded_when_flag_set(db_session: Session):
 
 
 def test_mrr_plan_lists_active_subscribers(db_session: Session):
-    _org(db_session, "30", name="A", status=OrgStatus.ACTIVE,
-         monthly_ap=Decimal("10000"))
-    _org(db_session, "31", name="B", status=OrgStatus.ACTIVE,
-         monthly_ap=Decimal("5000"))
-    _org(db_session, "32", name="C-churn", status=OrgStatus.CHURNED,
-         monthly_ap=Decimal("999"))  # неактивен — не считаем
-    _org(db_session, "33", name="D-noap", status=OrgStatus.ACTIVE,
-         monthly_ap=None)  # без АП — не считаем
+    _org(db_session, "30", name="A", status=OrgStatus.ACTIVE, monthly_ap=Decimal("10000"))
+    _org(db_session, "31", name="B", status=OrgStatus.ACTIVE, monthly_ap=Decimal("5000"))
+    _org(
+        db_session, "32", name="C-churn", status=OrgStatus.CHURNED, monthly_ap=Decimal("999")
+    )  # неактивен — не считаем
+    _org(
+        db_session, "33", name="D-noap", status=OrgStatus.ACTIVE, monthly_ap=None
+    )  # без АП — не считаем
 
     criteria = ReportCriteria(metric="mrr_plan")
     rows = build_composition_report(db_session, criteria)
@@ -140,13 +164,11 @@ def test_mrr_plan_lists_active_subscribers(db_session: Session):
 
 def test_collected_current_reuses_mrr_fact_for_given_period(db_session: Session):
     today = date.today()
-    org = _org(db_session, "40", name="A", status=OrgStatus.ACTIVE,
-               monthly_ap=Decimal("10000"))
+    org = _org(db_session, "40", name="A", status=OrgStatus.ACTIVE, monthly_ap=Decimal("10000"))
     ch = _charge(db_session, org, today.year, today.month, 10000)
     _pay(db_session, org, ch, 7000, today.replace(day=1))
 
-    criteria = ReportCriteria(metric="collected_current",
-                              period=f"{today.year}-{today.month:02d}")
+    criteria = ReportCriteria(metric="collected_current", period=f"{today.year}-{today.month:02d}")
     rows = build_composition_report(db_session, criteria)
     assert len(rows) == 1
     assert rows[0]["contribution"] == 7000.0
@@ -158,10 +180,9 @@ def test_collected_current_reuses_mrr_fact_for_given_period(db_session: Session)
 
 def test_active_clients_lists_actives_with_last_payment(db_session: Session):
     a = _org(db_session, "50", name="A", status=OrgStatus.ACTIVE)
-    b = _org(db_session, "51", name="B", status=OrgStatus.ACTIVE)
+    _org(db_session, "51", name="B", status=OrgStatus.ACTIVE)
     _org(db_session, "52", name="C-churn", status=OrgStatus.CHURNED)
-    _org(db_session, "53", name="D-excl", status=OrgStatus.ACTIVE,
-         excluded_from_analytics=True)
+    _org(db_session, "53", name="D-excl", status=OrgStatus.ACTIVE, excluded_from_analytics=True)
 
     ch = _charge(db_session, a, 2026, 4, 1000)
     _pay(db_session, a, ch, 1000, date(2026, 4, 10))
@@ -198,8 +219,7 @@ def test_new_paid_curr_year(db_session: Session):
 
 def test_new_paid_prev_month(db_session: Session):
     today = date.today()
-    prev_y, prev_m = ((today.year, today.month - 1)
-                      if today.month > 1 else (today.year - 1, 12))
+    prev_y, prev_m = (today.year, today.month - 1) if today.month > 1 else (today.year - 1, 12)
     a = _org(db_session, "70", name="A-prev-m", status=OrgStatus.ACTIVE)
     b = _org(db_session, "71", name="B-curr-m", status=OrgStatus.ACTIVE)
     ch_a = _charge(db_session, a, prev_y, prev_m, 100)

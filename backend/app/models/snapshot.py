@@ -7,9 +7,7 @@ from sqlmodel import Field, SQLModel, UniqueConstraint
 
 class MonthlySnapshot(SQLModel, table=True):
     __tablename__ = "monthly_snapshots"
-    __table_args__ = (
-        UniqueConstraint("organization_id", "year", "month", "import_run_id"),
-    )
+    __table_args__ = (UniqueConstraint("organization_id", "year", "month", "import_run_id"),)
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     organization_id: uuid.UUID = Field(foreign_key="organizations.id", index=True)

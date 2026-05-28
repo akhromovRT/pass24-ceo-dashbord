@@ -5,6 +5,7 @@
 строка с пустыми object-полями. Клиент-сайд DataTable сам сортирует и
 фильтрует — поэтому без пагинации (~200-500 строк норм).
 """
+
 from fastapi import APIRouter, Depends, Query
 from sqlmodel import Session, select
 
@@ -46,49 +47,53 @@ def list_registry(
         objects_total += len(org_objects) if org_objects else (org.objects_count_declared or 1)
         if org_objects:
             for co in org_objects:
-                items.append({
-                    "id": f"{org.id}:{co.id}",
+                items.append(
+                    {
+                        "id": f"{org.id}:{co.id}",
+                        "org_id": str(org.id),
+                        "object_id": str(co.id),
+                        "company": org.name_display or org.name_1c,
+                        "inn": org.inn,
+                        "object_name": co.name,
+                        "contract_1c": org.contract_1c_raw,
+                        "active_doc": org.active_doc_raw,
+                        "cloud_url": co.cloud_url,
+                        "object_number": co.object_number,
+                        "objects_count": org.objects_count_declared,
+                        "object_type": co.object_type,
+                        "address": co.address,
+                        "city_region": co.city_region,
+                        "doc_exchange": org.doc_exchange,
+                        "in_registry": org.in_registry,
+                        "status": org.status,
+                        "monthly_ap": float(org.monthly_ap) if org.monthly_ap is not None else None,
+                        "total_debt": float(org.total_debt) if org.total_debt is not None else None,
+                    }
+                )
+        else:
+            items.append(
+                {
+                    "id": f"{org.id}:_no_object",
                     "org_id": str(org.id),
-                    "object_id": str(co.id),
+                    "object_id": None,
                     "company": org.name_display or org.name_1c,
                     "inn": org.inn,
-                    "object_name": co.name,
+                    "object_name": None,
                     "contract_1c": org.contract_1c_raw,
                     "active_doc": org.active_doc_raw,
-                    "cloud_url": co.cloud_url,
-                    "object_number": co.object_number,
+                    "cloud_url": org.cloud_url,
+                    "object_number": org.system_number,
                     "objects_count": org.objects_count_declared,
-                    "object_type": co.object_type,
-                    "address": co.address,
-                    "city_region": co.city_region,
+                    "object_type": org.object_type,
+                    "address": org.address,
+                    "city_region": org.city_region,
                     "doc_exchange": org.doc_exchange,
                     "in_registry": org.in_registry,
                     "status": org.status,
                     "monthly_ap": float(org.monthly_ap) if org.monthly_ap is not None else None,
                     "total_debt": float(org.total_debt) if org.total_debt is not None else None,
-                })
-        else:
-            items.append({
-                "id": f"{org.id}:_no_object",
-                "org_id": str(org.id),
-                "object_id": None,
-                "company": org.name_display or org.name_1c,
-                "inn": org.inn,
-                "object_name": None,
-                "contract_1c": org.contract_1c_raw,
-                "active_doc": org.active_doc_raw,
-                "cloud_url": org.cloud_url,
-                "object_number": org.system_number,
-                "objects_count": org.objects_count_declared,
-                "object_type": org.object_type,
-                "address": org.address,
-                "city_region": org.city_region,
-                "doc_exchange": org.doc_exchange,
-                "in_registry": org.in_registry,
-                "status": org.status,
-                "monthly_ap": float(org.monthly_ap) if org.monthly_ap is not None else None,
-                "total_debt": float(org.total_debt) if org.total_debt is not None else None,
-            })
+                }
+            )
 
     return {
         "items": items,

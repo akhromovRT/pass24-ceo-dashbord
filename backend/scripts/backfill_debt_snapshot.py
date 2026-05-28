@@ -9,6 +9,7 @@ DebtSnapshot + DebtSnapshotRow для каждой buyer/contract/document-ст�
         --import-run-id <UUID> \
         --file /path/to/Задолженность.xls
 """
+
 from __future__ import annotations
 
 import argparse
@@ -26,8 +27,13 @@ from sqlmodel import Session, select  # noqa: E402
 
 from app.core.database import engine  # noqa: E402
 from app.models import (  # noqa: E402
-    Contract, DebtSnapshot, DebtSnapshotLevel, DebtSnapshotRow,
-    Document, ImportRun, Organization,
+    Contract,
+    DebtSnapshot,
+    DebtSnapshotLevel,
+    DebtSnapshotRow,
+    Document,
+    ImportRun,
+    Organization,
 )
 from app.parser.debt_report import parse_debt_report  # noqa: E402
 
@@ -45,17 +51,17 @@ def _sum(buyers, field: str) -> Decimal | None:
 
 def backfill(import_run_id: uuid.UUID, file_path: Path) -> dict:
     parse_result = parse_debt_report(file_path)
-    print(f"Parser: buyers={parse_result.buyers_count} "
-          f"contracts={parse_result.contracts_count} "
-          f"documents={parse_result.documents_count} "
-          f"errors={len(parse_result.errors)}")
+    print(
+        f"Parser: buyers={parse_result.buyers_count} "
+        f"contracts={parse_result.contracts_count} "
+        f"documents={parse_result.documents_count} "
+        f"errors={len(parse_result.errors)}"
+    )
     if parse_result.errors:
         print(f"WARN: {len(parse_result.errors)} ошибок парсера; backfill продолжается.")
 
     with Session(engine) as session:
-        run = session.exec(
-            select(ImportRun).where(ImportRun.id == import_run_id)
-        ).first()
+        run = session.exec(select(ImportRun).where(ImportRun.id == import_run_id)).first()
         if not run:
             raise SystemExit(f"ImportRun {import_run_id} не найден")
 
@@ -221,6 +227,7 @@ def main() -> None:
 
     result = backfill(uuid.UUID(args.import_run_id), file_path)
     import json
+
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
 

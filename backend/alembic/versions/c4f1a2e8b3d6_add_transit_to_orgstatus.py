@@ -5,6 +5,7 @@ Revises: b5d2e9a47c1f
 Create Date: 2026-05-21 13:00:00.000000
 
 """
+
 from typing import Sequence, Union
 
 from alembic import op
@@ -25,6 +26,4 @@ def downgrade() -> None:
     # PostgreSQL не поддерживает удаление значения из enum без пересоздания типа.
     # Если потребуется откат — нужно вручную создать новый enum без 'transit',
     # перевести все TRANSIT-записи в другой статус и заменить тип столбца.
-    raise NotImplementedError(
-        "Удаление значения из orgstatus требует ручного пересоздания типа."
-    )
+    raise NotImplementedError("Удаление значения из orgstatus требует ручного пересоздания типа.")

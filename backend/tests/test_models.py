@@ -1,12 +1,12 @@
 from decimal import Decimal
 
-from app.models.organization import OrgStatus, OrgType, Organization
+from app.models.alert import Alert, AlertSeverity, AlertStatus, AlertType
 from app.models.contract import Contract, ContractStatus, ContractType
 from app.models.document import DocType, Document
-from app.models.snapshot import MonthlySnapshot
 from app.models.import_run import ImportRun, ImportStatus
+from app.models.organization import Organization, OrgStatus, OrgType
+from app.models.snapshot import MonthlySnapshot
 from app.models.user import User, UserRole
-from app.models.alert import Alert, AlertType, AlertSeverity, AlertStatus
 
 
 class TestOrganization:
@@ -137,7 +137,9 @@ class TestMonthlySnapshot:
         import uuid
 
         snap = MonthlySnapshot(
-            organization_id=uuid.uuid4(), year=2026, month=2,
+            organization_id=uuid.uuid4(),
+            year=2026,
+            month=2,
         )
         assert snap.is_active is True
 
@@ -186,14 +188,19 @@ class TestUser:
 
     def test_default_role_is_viewer(self):
         user = User(
-            name="Test", email="test@test.ru", hashed_password="hashed",
+            name="Test",
+            email="test@test.ru",
+            hashed_password="hashed",
         )
         assert user.role == UserRole.VIEWER
 
     def test_all_roles(self):
         for role in UserRole:
             user = User(
-                name="T", email=f"{role.value}@t.ru", hashed_password="h", role=role,
+                name="T",
+                email=f"{role.value}@t.ru",
+                hashed_password="h",
+                role=role,
             )
             assert user.role == role
 

@@ -7,6 +7,7 @@
 См. P3.4 в backlog. APScheduler не используем намеренно — системный cron
 проще, без новых deps, без рисков двойного запуска при ребуте backend.
 """
+
 import sys
 
 from sqlmodel import Session

@@ -35,6 +35,20 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W"]
+# E402 — у нас местами импорты идут после module-level констант (например
+# OrgStatus-сетов в billing.py), это сделано для читаемости.
+# E712 — SQLAlchemy filter pattern `Column == True` нельзя заменить на
+# `Column is True` без поломки SQL-перевода; глобальный ignore проще, чем
+# расставлять `# noqa: E712` по всему коду.
+ignore = ["E402", "E712"]
+
+[tool.ruff.lint.per-file-ignores]
+# В тестах E501 (длинная строка) допустим — там часто реальные «назначения
+# платежей» из 1С с длинными UPPER-литералами, которые рвать не имеет смысла.
+"tests/*" = ["E501"]
+# Скрипты разовых операций (dedupe, backfill, miграционные правки) — там
+# длинные SQL-литералы и логи, не критично.
+"scripts/*" = ["E501"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]

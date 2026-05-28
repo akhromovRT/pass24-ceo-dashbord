@@ -3,6 +3,7 @@
 Пишем `actor_email` снапшотом — чтобы запись пережила удаление пользователя
 (actor_user_id уйдёт в NULL по SET NULL, но email останется).
 """
+
 import json
 
 from sqlmodel import Session

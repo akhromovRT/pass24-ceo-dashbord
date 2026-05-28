@@ -1,4 +1,5 @@
 """Построение ленты месячных начислений (monthly_charge) клиента."""
+
 from datetime import date
 from decimal import Decimal
 
@@ -32,9 +33,11 @@ class ChargeService:
         self.session = session
 
     def _charges(self, org_id) -> list[MonthlyCharge]:
-        return list(self.session.exec(
-            select(MonthlyCharge).where(MonthlyCharge.organization_id == org_id)
-        ).all())
+        return list(
+            self.session.exec(
+                select(MonthlyCharge).where(MonthlyCharge.organization_id == org_id)
+            ).all()
+        )
 
     def _tariff_for(self, org_id, year: int, month: int) -> Decimal:
         """Тариф, действовавший в (year, month): последний tariff_period
@@ -42,8 +45,7 @@ class ChargeService:
         target = date(year, month, 1)
         rows = self.session.exec(
             select(TariffPeriod)
-            .where(TariffPeriod.organization_id == org_id,
-                   TariffPeriod.valid_from <= target)
+            .where(TariffPeriod.organization_id == org_id, TariffPeriod.valid_from <= target)
             .order_by(TariffPeriod.valid_from.desc())
         ).all()
         return rows[0].monthly_amount if rows else Decimal("0")
@@ -54,10 +56,12 @@ class ChargeService:
         rows = self.session.exec(
             select(Document)
             .join(Contract, Contract.id == Document.contract_id)
-            .where(Document.organization_id == org_id,
-                   Document.doc_type == DocType.SALE,
-                   Document.doc_date.is_not(None),
-                   Contract.contract_type == ContractType.SUBSCRIPTION)
+            .where(
+                Document.organization_id == org_id,
+                Document.doc_type == DocType.SALE,
+                Document.doc_date.is_not(None),
+                Contract.contract_type == ContractType.SUBSCRIPTION,
+            )
         ).all()
         out: dict[tuple[int, int], Document] = {}
         for d in rows:
@@ -83,9 +87,11 @@ class ChargeService:
             candidates.append(date(y, m, 1))
         first_pay = self.session.exec(
             select(Document.doc_date)
-            .where(Document.organization_id == org_id,
-                   Document.doc_type == DocType.PAYMENT,
-                   Document.doc_date.is_not(None))
+            .where(
+                Document.organization_id == org_id,
+                Document.doc_type == DocType.PAYMENT,
+                Document.doc_date.is_not(None),
+            )
             .order_by(Document.doc_date)
         ).first()
         if first_pay:
@@ -122,9 +128,11 @@ class ChargeService:
         TRANSIT — это юр.лицо, переставшее платить (переоформление ИНН,
         транзитный плательщик за другого клиента)."""
         org = self.session.get(Organization, org_id)
-        if (org is not None
-                and org.status in (OrgStatus.CHURNED, OrgStatus.TRANSIT)
-                and org.churn_month is not None):
+        if (
+            org is not None
+            and org.status in (OrgStatus.CHURNED, OrgStatus.TRANSIT)
+            and org.churn_month is not None
+        ):
             if org.churn_month < start:
                 # Месяц отключения раньше точки начала ленты — лента пуста.
                 self._clear_charges_and_allocs(org_id)
@@ -136,15 +144,24 @@ class ChargeService:
         for year, month in _iter_months(start, through):
             real = realizations.get((year, month))
             if real is not None and (real.amount or 0) > 0:
-                self.session.add(MonthlyCharge(
-                    organization_id=org_id, year=year, month=month,
-                    amount=real.amount, source=ChargeSource.REALIZATION_1C,
-                    source_document_id=real.id,
-                ))
+                self.session.add(
+                    MonthlyCharge(
+                        organization_id=org_id,
+                        year=year,
+                        month=month,
+                        amount=real.amount,
+                        source=ChargeSource.REALIZATION_1C,
+                        source_document_id=real.id,
+                    )
+                )
             else:
-                self.session.add(MonthlyCharge(
-                    organization_id=org_id, year=year, month=month,
-                    amount=self._tariff_for(org_id, year, month),
-                    source=ChargeSource.SYNTHETIC_TARIFF,
-                ))
+                self.session.add(
+                    MonthlyCharge(
+                        organization_id=org_id,
+                        year=year,
+                        month=month,
+                        amount=self._tariff_for(org_id, year, month),
+                        source=ChargeSource.SYNTHETIC_TARIFF,
+                    )
+                )
         self.session.flush()

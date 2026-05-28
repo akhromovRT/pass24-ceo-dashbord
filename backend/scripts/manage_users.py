@@ -20,6 +20,7 @@
 Запуск через `python scripts/manage_users.py ...` тоже поддерживается —
 PYTHONPATH добавляется автоматически.
 """
+
 from __future__ import annotations
 
 import os
@@ -145,7 +146,9 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--email", required=True)
     c.add_argument("--name", required=True)
     c.add_argument("--role", choices=["admin", "manager", "viewer"], default="viewer")
-    c.add_argument("--password", default=None, help="Optional explicit password (otherwise generated)")
+    c.add_argument(
+        "--password", default=None, help="Optional explicit password (otherwise generated)"
+    )
 
     r = sub.add_parser("reset-password", help="Reset password (random or provided)")
     r.add_argument("--email", required=True)

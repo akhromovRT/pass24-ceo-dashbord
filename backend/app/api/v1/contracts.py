@@ -31,8 +31,10 @@ def list_contracts(
     base = select(Contract, Organization).join(
         Organization, Contract.organization_id == Organization.id
     )
-    count_base = select(func.count()).select_from(Contract).join(
-        Organization, Contract.organization_id == Organization.id
+    count_base = (
+        select(func.count())
+        .select_from(Contract)
+        .join(Organization, Contract.organization_id == Organization.id)
     )
 
     if search:

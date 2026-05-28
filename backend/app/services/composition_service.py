@@ -3,6 +3,7 @@
 Backend для пресета composition в /reports. Для каждой метрики
 возвращает список клиентов, формирующих её значение, и поддерживает
 control_value — сумму/счёт, обязанную совпасть с плиткой Dashboard."""
+
 from datetime import date, timedelta
 
 from sqlmodel import Session, func, select
@@ -22,8 +23,18 @@ from app.services.dashboard_service import (
 )
 
 _RU_MONTHS = [
-    "январь", "февраль", "март", "апрель", "май", "июнь",
-    "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь",
+    "январь",
+    "февраль",
+    "март",
+    "апрель",
+    "май",
+    "июнь",
+    "июль",
+    "август",
+    "сентябрь",
+    "октябрь",
+    "ноябрь",
+    "декабрь",
 ]
 
 # --- каталог колонок ---------------------------------------------------------
@@ -42,17 +53,16 @@ COMPOSITION_COLUMNS: list[tuple[str, str]] = [
     ("days_since_last", "Дней с последнего платежа"),
 ]
 
-_BASE_COLS = ["name", "inn", "manager", "monthly_ap", "status",
-              "churn_month", "city"]
+_BASE_COLS = ["name", "inn", "manager", "monthly_ap", "status", "churn_month", "city"]
 
 _COLS_BY_METRIC: dict[str, list[str]] = {
-    "mrr_fact":                 _BASE_COLS + ["contribution"],
-    "collected_current":        _BASE_COLS + ["contribution"],
-    "mrr_plan":                 _BASE_COLS + ["contribution"],
-    "active_clients":           _BASE_COLS + ["last_payment_date"],
-    "new_paid_curr_year":       _BASE_COLS + ["first_payment_date"],
-    "new_paid_prev_month":      _BASE_COLS + ["first_payment_date"],
-    "new_paid_curr_month":      _BASE_COLS + ["first_payment_date"],
+    "mrr_fact": _BASE_COLS + ["contribution"],
+    "collected_current": _BASE_COLS + ["contribution"],
+    "mrr_plan": _BASE_COLS + ["contribution"],
+    "active_clients": _BASE_COLS + ["last_payment_date"],
+    "new_paid_curr_year": _BASE_COLS + ["first_payment_date"],
+    "new_paid_prev_month": _BASE_COLS + ["first_payment_date"],
+    "new_paid_curr_month": _BASE_COLS + ["first_payment_date"],
     "stopped_since_year_start": _BASE_COLS + ["last_payment_date", "days_since_last"],
 }
 
@@ -106,11 +116,8 @@ def _apply_org_filters(query, c):
     if c.manager_id:
         query = query.where(Organization.manager_id == c.manager_id)
     if c.city:
-        query = query.where(
-            func.lower(Organization.city_region).like(f"%{c.city.lower()}%")
-        )
-    statuses = [OrgStatus(s) for s in c.statuses
-                if s in OrgStatus._value2member_map_]
+        query = query.where(func.lower(Organization.city_region).like(f"%{c.city.lower()}%"))
+    statuses = [OrgStatus(s) for s in c.statuses if s in OrgStatus._value2member_map_]
     if statuses:
         query = query.where(Organization.status.in_(statuses))  # type: ignore[union-attr]
     return query
@@ -124,8 +131,7 @@ def _org_row(o: Organization, managers: dict) -> dict:
         "monthly_ap": round(to_float(o.monthly_ap), 2) if o.monthly_ap else None,
         "status": _STATUS_LABELS.get(o.status, str(o.status)),
         "churn_month": (
-            f"{_RU_MONTHS[o.churn_month.month - 1]} {o.churn_month.year}"
-            if o.churn_month else ""
+            f"{_RU_MONTHS[o.churn_month.month - 1]} {o.churn_month.year}" if o.churn_month else ""
         ),
         "city": o.city_region or "—",
     }
@@ -140,19 +146,19 @@ def _build_mrr_fact(session: Session, c) -> list[dict]:
         return []
     y, m = period
     contrib_query = (
-        select(MonthlyCharge.organization_id,
-               func.coalesce(func.sum(PaymentAllocation.allocated_amount), 0))
+        select(
+            MonthlyCharge.organization_id,
+            func.coalesce(func.sum(PaymentAllocation.allocated_amount), 0),
+        )
         .select_from(PaymentAllocation)
         .join(MonthlyCharge, MonthlyCharge.id == PaymentAllocation.monthly_charge_id)
         .where(MonthlyCharge.year == y, MonthlyCharge.month == m)
         .group_by(MonthlyCharge.organization_id)
     )
     if not c.include_excluded:
-        contrib_query = (
-            contrib_query
-            .join(Organization, Organization.id == MonthlyCharge.organization_id)
-            .where(excl())
-        )
+        contrib_query = contrib_query.join(
+            Organization, Organization.id == MonthlyCharge.organization_id
+        ).where(excl())
     contrib_rows = session.exec(contrib_query).all()
     contrib = {oid: to_float(s) for oid, s in contrib_rows if to_float(s) > 0}
     if not contrib:
@@ -204,8 +210,7 @@ def _build_active_clients(session: Session, c) -> list[dict]:
     return out
 
 
-def _materialize_first_pay(session: Session, c, target_ids: set,
-                           first_pay: dict) -> list[dict]:
+def _materialize_first_pay(session: Session, c, target_ids: set, first_pay: dict) -> list[dict]:
     if not target_ids:
         return []
     base = select(Organization).where(Organization.id.in_(list(target_ids)))  # type: ignore[union-attr]
@@ -224,15 +229,13 @@ def _materialize_first_pay(session: Session, c, target_ids: set,
 
 def _build_new_paid_in_year(session: Session, c, year: int) -> list[dict]:
     first_pay = dict(first_pay_rows(session))
-    target_ids = {oid for oid, d in first_pay.items()
-                  if d and d.year == year}
+    target_ids = {oid for oid, d in first_pay.items() if d and d.year == year}
     return _materialize_first_pay(session, c, target_ids, first_pay)
 
 
 def _build_new_paid_in_month(session: Session, c, year: int, month: int) -> list[dict]:
     first_pay = dict(first_pay_rows(session))
-    target_ids = {oid for oid, d in first_pay.items()
-                  if d and d.year == year and d.month == month}
+    target_ids = {oid for oid, d in first_pay.items() if d and d.year == year and d.month == month}
     return _materialize_first_pay(session, c, target_ids, first_pay)
 
 
@@ -257,8 +260,7 @@ def _build_stopped(session: Session, c) -> list[dict]:
     year_start = date(today.year, 1, 1)
     cutoff_60 = today - timedelta(days=60)
     last_pay = dict(last_pay_rows(session))
-    target_ids = {oid for oid, d in last_pay.items()
-                  if d and year_start <= d <= cutoff_60}
+    target_ids = {oid for oid, d in last_pay.items() if d and year_start <= d <= cutoff_60}
     if not target_ids:
         return []
     base = select(Organization).where(Organization.id.in_(list(target_ids)))  # type: ignore[union-attr]
@@ -310,8 +312,7 @@ def control_value_for(metric: str, rows: list[dict]) -> float | int:
 def columns_for_composition(c) -> list[tuple[str, str]]:
     if c.metric not in _COLS_BY_METRIC:
         return COMPOSITION_COLUMNS
-    period = (_parse_month(c.period)
-              if c.metric in ("mrr_fact", "collected_current") else None)
+    period = _parse_month(c.period) if c.metric in ("mrr_fact", "collected_current") else None
     keys = _COLS_BY_METRIC[c.metric]
     if c.columns:
         chosen = set(c.columns)
@@ -320,7 +321,6 @@ def columns_for_composition(c) -> list[tuple[str, str]]:
     catalog = dict(COMPOSITION_COLUMNS)
     out: list[tuple[str, str]] = []
     for k in keys:
-        header = (_contribution_header(c.metric, period)
-                  if k == "contribution" else catalog[k])
+        header = _contribution_header(c.metric, period) if k == "contribution" else catalog[k]
         out.append((k, header))
     return out

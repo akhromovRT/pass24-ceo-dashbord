@@ -6,10 +6,16 @@ from decimal import Decimal
 from sqlmodel import Session, select
 
 from app.models import (
-    DebtSnapshot, DebtSnapshotLevel, DebtSnapshotRow, Organization,
+    DebtSnapshot,
+    DebtSnapshotLevel,
+    DebtSnapshotRow,
+    Organization,
 )
 from app.parser.debt_report import (
-    ParsedBuyer, ParsedContract, ParsedDocument, ParseResult,
+    ParsedBuyer,
+    ParsedContract,
+    ParsedDocument,
+    ParseResult,
 )
 from app.services.import_service import ImportService
 
@@ -159,9 +165,7 @@ class TestDebtSnapshotCreated:
             .where(DebtSnapshotRow.organization_id.is_not(None))
         ).all()
         assert len(yul_rows) == 4
-        org = db_session.exec(
-            select(Organization).where(Organization.inn == "7700000001")
-        ).one()
+        org = db_session.exec(select(Organization).where(Organization.inn == "7700000001")).one()
         for r in yul_rows:
             assert r.organization_id == org.id
         fl_rows = db_session.exec(

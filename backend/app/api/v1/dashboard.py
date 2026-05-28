@@ -3,6 +3,7 @@
 Все аналитические эндпоинты автоматически фильтруют организации с
 excluded_from_analytics=True. Метрики сбора считаются из AR-леджера
 (monthly_charges + payment_allocations), а не из сумм платежей по дате прихода."""
+
 import calendar
 from datetime import date, timedelta
 
@@ -34,7 +35,8 @@ from app.services.dashboard_service import plan_mrr_total as _plan_mrr_total
 from app.services.dashboard_service import to_float as _f
 
 router = APIRouter(
-    prefix="/dashboard", tags=["dashboard"],
+    prefix="/dashboard",
+    tags=["dashboard"],
     dependencies=[Depends(get_current_user)],
 )
 
@@ -42,6 +44,7 @@ _PAYMENTS_CONTRACT = "1C-PAYMENTS"
 
 
 # --- эндпоинты --------------------------------------------------------------
+
 
 @router.get("/summary")
 def dashboard_summary(session: Session = Depends(get_session)):
@@ -60,32 +63,44 @@ def dashboard_summary(session: Session = Depends(get_session)):
     if fact_mrr_prev > 0:
         mom_pct = round((fact_mrr - fact_mrr_prev) / fact_mrr_prev * 100, 1)
 
-    total_debt = _f(session.exec(
-        select(func.coalesce(func.sum(Organization.total_debt), 0)).where(_excl())
-    ).one())
+    total_debt = _f(
+        session.exec(
+            select(func.coalesce(func.sum(Organization.total_debt), 0)).where(_excl())
+        ).one()
+    )
 
     # Долг по группам статусов (P3.0.3, вариант Б): «к взысканию» = ACTIVE+SUSPENDED,
     # «к списанию» = CHURNED+TRANSIT. PROSPECT исключаем — это шум.
-    total_debt_active = _f(session.exec(
-        select(func.coalesce(func.sum(Organization.total_debt), 0))
-        .where(_excl(), Organization.status.in_(  # type: ignore[union-attr]
-            [OrgStatus.ACTIVE, OrgStatus.SUSPENDED]
-        ))
-    ).one())
-    total_debt_writeoff = _f(session.exec(
-        select(func.coalesce(func.sum(Organization.total_debt), 0))
-        .where(_excl(), Organization.status.in_(  # type: ignore[union-attr]
-            [OrgStatus.CHURNED, OrgStatus.TRANSIT]
-        ))
-    ).one())
+    total_debt_active = _f(
+        session.exec(
+            select(func.coalesce(func.sum(Organization.total_debt), 0)).where(
+                _excl(),
+                Organization.status.in_(  # type: ignore[union-attr]
+                    [OrgStatus.ACTIVE, OrgStatus.SUSPENDED]
+                ),
+            )
+        ).one()
+    )
+    total_debt_writeoff = _f(
+        session.exec(
+            select(func.coalesce(func.sum(Organization.total_debt), 0)).where(
+                _excl(),
+                Organization.status.in_(  # type: ignore[union-attr]
+                    [OrgStatus.CHURNED, OrgStatus.TRANSIT]
+                ),
+            )
+        ).one()
+    )
 
     active_clients = session.exec(
-        select(func.count()).select_from(Organization)
+        select(func.count())
+        .select_from(Organization)
         .where(_excl(), Organization.status == OrgStatus.ACTIVE)
     ).one()
 
     open_alerts = session.exec(
-        select(func.count()).select_from(Alert)
+        select(func.count())
+        .select_from(Alert)
         .join(Organization, Organization.id == Alert.organization_id)
         .where(_excl(), Alert.status == AlertStatus.OPEN)
     ).one()
@@ -96,7 +111,8 @@ def dashboard_summary(session: Session = Depends(get_session)):
 
     new_30d = session.exec(
         select(func.count()).select_from(
-            select(Document.organization_id).distinct()
+            select(Document.organization_id)
+            .distinct()
             .join(Organization, Organization.id == Document.organization_id)
             .where(_excl(), Document.doc_type == DocType.PAYMENT)
             .group_by(Document.organization_id)
@@ -106,7 +122,8 @@ def dashboard_summary(session: Session = Depends(get_session)):
     ).one()
     new_90d = session.exec(
         select(func.count()).select_from(
-            select(Document.organization_id).distinct()
+            select(Document.organization_id)
+            .distinct()
             .join(Organization, Organization.id == Document.organization_id)
             .where(_excl(), Document.doc_type == DocType.PAYMENT)
             .group_by(Document.organization_id)
@@ -116,18 +133,20 @@ def dashboard_summary(session: Session = Depends(get_session)):
     ).one()
 
     paying_active = session.exec(
-        select(Organization.id)
-        .where(
+        select(Organization.id).where(
             _excl(),
             Organization.status == OrgStatus.ACTIVE,
             Organization.monthly_ap.is_not(None),  # type: ignore[union-attr]
             Organization.monthly_ap > 0,  # type: ignore[operator]
         )
     ).all()
-    recently_paid_ids = set(session.exec(
-        select(Document.organization_id).distinct()
-        .where(Document.doc_type == DocType.PAYMENT, Document.doc_date >= cutoff_60)
-    ).all())
+    recently_paid_ids = set(
+        session.exec(
+            select(Document.organization_id)
+            .distinct()
+            .where(Document.doc_type == DocType.PAYMENT, Document.doc_date >= cutoff_60)
+        ).all()
+    )
     churned_60d = sum(1 for oid in paying_active if oid not in recently_paid_ids)
 
     # --- метрики клиентской базы --------------------------------------------
@@ -135,53 +154,52 @@ def dashboard_summary(session: Session = Depends(get_session)):
     first_pay_rows = _first_pay_rows_q(session)
     last_pay_rows = _last_pay_rows_q(session)
     new_paid_prev_month = sum(
-        1 for _oid, d in first_pay_rows
-        if d is not None and d.year == prev_y and d.month == prev_m
+        1 for _oid, d in first_pay_rows if d is not None and d.year == prev_y and d.month == prev_m
     )
     new_paid_curr_month = sum(
-        1 for _oid, d in first_pay_rows
+        1
+        for _oid, d in first_pay_rows
         if d is not None and d.year == today.year and d.month == today.month
     )
     # новые за год: клиенты, чей первый платёж пришёлся на текущий год
     new_paid_curr_year = sum(
-        1 for _oid, d in first_pay_rows
-        if d is not None and d.year == today.year
+        1 for _oid, d in first_pay_rows if d is not None and d.year == today.year
     )
     # TRANSIT — юр.лица, переставшие платить (переоформление ИНН либо
     # транзитные плательщики за других клиентов). В отток их не учитываем.
-    transit_ids = set(session.exec(
-        select(Organization.id)
-        .where(Organization.status == OrgStatus.TRANSIT)
-    ).all())
+    transit_ids = set(
+        session.exec(select(Organization.id).where(Organization.status == OrgStatus.TRANSIT)).all()
+    )
     # перестали платить с начала года: последний платёж в этом году, >60 дней назад
     stopped_since_year_start = sum(
-        1 for oid, d in last_pay_rows
+        1
+        for oid, d in last_pay_rows
         if d is not None and year_start <= d <= cutoff_60 and oid not in transit_ids
     )
     # база для churn rate — клиенты, у которых был платёж в прошлом году
     # (TRANSIT исключены — они не клиенты сами, а плательщики за других)
     paying_base = session.exec(
         select(func.count()).select_from(
-            select(Document.organization_id).distinct()
+            select(Document.organization_id)
+            .distinct()
             .join(Organization, Organization.id == Document.organization_id)
-            .where(_excl(), Document.doc_type == DocType.PAYMENT,
-                   Organization.status != OrgStatus.TRANSIT,
-                   func.extract("year", Document.doc_date) == today.year - 1)
+            .where(
+                _excl(),
+                Document.doc_type == DocType.PAYMENT,
+                Organization.status != OrgStatus.TRANSIT,
+                func.extract("year", Document.doc_date) == today.year - 1,
+            )
             .subquery()
         )
     ).one()
-    churn_rate = (round(stopped_since_year_start / paying_base * 100, 1)
-                  if paying_base else None)
+    churn_rate = round(stopped_since_year_start / paying_base * 100, 1) if paying_base else None
 
     # текущий (незакрытый) месяц — собрано за период из леджера
     cur_collected = collected.get((today.year, today.month), 0.0)
     days_in_month = calendar.monthrange(today.year, today.month)[1]
 
     # доля корзины 90+ — из той же логики, что и график «Структура долга»
-    debt_90plus = sum(
-        debt for _o, bucket, _age, debt in debt_aging(session)
-        if bucket == "90+"
-    )
+    debt_90plus = sum(debt for _o, bucket, _age, debt in debt_aging(session) if bucket == "90+")
     debt_90plus_share = round(debt_90plus / total_debt * 100, 1) if total_debt else 0.0
 
     prev_accrued = accrued.get((prev_y, prev_m), 0.0)
@@ -225,11 +243,16 @@ def mrr_plan_vs_fact(months: int = 12, session: Session = Depends(get_session)):
     series = []
     for y, m in _months_back(months):
         fact = collected.get((y, m), 0.0)
-        series.append({
-            "year": y, "month": m, "label": f"{m:02d}/{y}",
-            "plan": plan_mrr, "fact": round(fact, 2),
-            "ratio": round(fact / plan_mrr * 100, 1) if plan_mrr else None,
-        })
+        series.append(
+            {
+                "year": y,
+                "month": m,
+                "label": f"{m:02d}/{y}",
+                "plan": plan_mrr,
+                "fact": round(fact, 2),
+                "ratio": round(fact / plan_mrr * 100, 1) if plan_mrr else None,
+            }
+        )
     return series
 
 
@@ -243,15 +266,20 @@ def collection_trend(session: Session = Depends(get_session)):
     today = date.today()
     cur = (today.year, today.month)
     out = []
-    for (y, m) in sorted(k for k in accrued if k <= cur):
+    for y, m in sorted(k for k in accrued if k <= cur):
         a = accrued[(y, m)]
         c = collected.get((y, m), 0.0)
-        out.append({
-            "year": y, "month": m, "label": f"{m:02d}/{y}",
-            "accrued": round(a, 2), "collected": round(c, 2),
-            "ratio": round(c / a * 100, 1) if a else None,
-            "is_current_month": (y, m) == cur,
-        })
+        out.append(
+            {
+                "year": y,
+                "month": m,
+                "label": f"{m:02d}/{y}",
+                "accrued": round(a, 2),
+                "collected": round(c, 2),
+                "ratio": round(c / a * 100, 1) if a else None,
+                "is_current_month": (y, m) == cur,
+            }
+        )
     return out
 
 
@@ -263,20 +291,25 @@ def cash_inflow(session: Session = Depends(get_session)):
         select(
             func.extract("year", Document.doc_date),
             func.extract("month", Document.doc_date),
-            MonthlyCharge.year, MonthlyCharge.month,
+            MonthlyCharge.year,
+            MonthlyCharge.month,
             PaymentAllocation.allocated_amount,
         )
         .select_from(PaymentAllocation)
         .join(Document, Document.id == PaymentAllocation.payment_document_id)
         .join(Organization, Organization.id == Document.organization_id)
-        .join(MonthlyCharge, MonthlyCharge.id == PaymentAllocation.monthly_charge_id,
-              isouter=True)
+        .join(MonthlyCharge, MonthlyCharge.id == PaymentAllocation.monthly_charge_id, isouter=True)
         .where(_excl(), Document.doc_date.is_not(None))  # type: ignore[union-attr]
     ).all()
 
     def _empty() -> dict:
-        return {"current": 0.0, "advance": 0.0, "arrears": 0.0,
-                "undetermined": 0.0, "non_subscription": 0.0}
+        return {
+            "current": 0.0,
+            "advance": 0.0,
+            "arrears": 0.0,
+            "undetermined": 0.0,
+            "non_subscription": 0.0,
+        }
 
     buckets: dict = {}
     for py, pm, cy, cm, amount in rows:
@@ -304,11 +337,13 @@ def cash_inflow(session: Session = Depends(get_session)):
         .select_from(Document)
         .join(Organization, Organization.id == Document.organization_id)
         .join(Contract, Contract.id == Document.contract_id)
-        .where(_excl(), Document.doc_type == DocType.PAYMENT,
-               Document.doc_date.is_not(None),  # type: ignore[union-attr]
-               Contract.contract_number == _PAYMENTS_CONTRACT)
-        .group_by(func.extract("year", Document.doc_date),
-                  func.extract("month", Document.doc_date))
+        .where(
+            _excl(),
+            Document.doc_type == DocType.PAYMENT,
+            Document.doc_date.is_not(None),  # type: ignore[union-attr]
+            Contract.contract_number == _PAYMENTS_CONTRACT,
+        )
+        .group_by(func.extract("year", Document.doc_date), func.extract("month", Document.doc_date))
     ).all()
     for py, pm, total in total_rows:
         key = (int(py), int(pm))
@@ -317,10 +352,16 @@ def cash_inflow(session: Session = Depends(get_session)):
         b["non_subscription"] = max(_f(total) - allocated, 0.0)
 
     out = []
-    for (y, m) in sorted(buckets):
+    for y, m in sorted(buckets):
         b = buckets[(y, m)]
-        out.append({"year": y, "month": m, "label": f"{m:02d}/{y}",
-                    **{k: round(v, 2) for k, v in b.items()}})
+        out.append(
+            {
+                "year": y,
+                "month": m,
+                "label": f"{m:02d}/{y}",
+                **{k: round(v, 2) for k, v in b.items()},
+            }
+        )
     return out
 
 
@@ -353,10 +394,16 @@ def attention(session: Session = Depends(get_session)):
     for alert_type, cnt, amount in rows:
         key = alert_type.value if hasattr(alert_type, "value") else str(alert_type)
         label, route, weight = _ALERT_META.get(key, (key, "/billing", 1))
-        out.append({
-            "type": key, "label": label, "route": route,
-            "count": int(cnt), "amount": _f(amount), "weight": weight,
-        })
+        out.append(
+            {
+                "type": key,
+                "label": label,
+                "route": route,
+                "count": int(cnt),
+                "amount": _f(amount),
+                "weight": weight,
+            }
+        )
     out.sort(key=lambda r: (-r["weight"], -r["amount"]))
     return out
 
@@ -365,15 +412,11 @@ def attention(session: Session = Depends(get_session)):
 def aging_buckets(session: Session = Depends(get_session)):
     """Структура долга по возрасту. Каждый клиент с долгом по 1С — ровно в
     одной корзине; сумма корзин равна суммарному долгу (плитка ДОЛГ)."""
-    buckets = {"0-30": [0.0, 0], "31-60": [0.0, 0],
-               "61-90": [0.0, 0], "90+": [0.0, 0]}
+    buckets = {"0-30": [0.0, 0], "31-60": [0.0, 0], "61-90": [0.0, 0], "90+": [0.0, 0]}
     for _o, bucket, _age, debt in debt_aging(session):
         buckets[bucket][0] += debt
         buckets[bucket][1] += 1
-    return [
-        {"bucket": k, "amount": round(v[0], 2), "count": v[1]}
-        for k, v in buckets.items()
-    ]
+    return [{"bucket": k, "amount": round(v[0], 2), "count": v[1]} for k, v in buckets.items()]
 
 
 @router.get("/aging/{bucket}")
@@ -384,14 +427,16 @@ def aging_bucket_detail(bucket: str, session: Session = Depends(get_session)):
     for o, b, age, debt in debt_aging(session):
         if b != bucket:
             continue
-        rows.append({
-            "inn": o.inn,
-            "name": o.name_display or o.name_1c,
-            "monthly_ap": _f(o.monthly_ap),
-            "total_debt": round(debt, 2),
-            "months_overdue": age,
-            "status": o.status,
-        })
+        rows.append(
+            {
+                "inn": o.inn,
+                "name": o.name_display or o.name_1c,
+                "monthly_ap": _f(o.monthly_ap),
+                "total_debt": round(debt, 2),
+                "months_overdue": age,
+                "status": o.status,
+            }
+        )
     rows.sort(key=lambda r: -r["total_debt"])
     return rows
 
@@ -409,7 +454,8 @@ def mrr_trend(
     """
     results = session.exec(
         select(
-            MonthlySnapshot.year, MonthlySnapshot.month,
+            MonthlySnapshot.year,
+            MonthlySnapshot.month,
             func.sum(MonthlySnapshot.sold_ap).label("sold_ap"),
             func.sum(MonthlySnapshot.paid_ap).label("paid_ap"),
         )
@@ -419,8 +465,7 @@ def mrr_trend(
         .order_by(MonthlySnapshot.year, MonthlySnapshot.month)
     ).all()
     history = [
-        {"year": r[0], "month": r[1], "sold_ap": _f(r[2]), "paid_ap": _f(r[3])}
-        for r in results
+        {"year": r[0], "month": r[1], "sold_ap": _f(r[2]), "paid_ap": _f(r[3])} for r in results
     ]
     if forecast_months <= 0 or len(history) < 3:
         return history
@@ -432,9 +477,9 @@ def mrr_trend(
 def _forecast_mrr(history: list[dict], months: int) -> list[dict]:
     """Линейная регрессия paid_ap по индексу месяца. Берём не больше 6
     последних точек (старее перестаёт отражать текущий тренд)."""
-    pts = [(i, float(h["paid_ap"] or 0))
-           for i, h in enumerate(history)
-           if h.get("paid_ap") is not None]
+    pts = [
+        (i, float(h["paid_ap"] or 0)) for i, h in enumerate(history) if h.get("paid_ap") is not None
+    ]
     if len(pts) < 3:
         return []
     pts = pts[-6:]
@@ -456,14 +501,18 @@ def _forecast_mrr(history: list[dict], months: int) -> list[dict]:
     for k in range(1, months + 1):
         m += 1
         if m > 12:
-            m = 1; y += 1
+            m = 1
+            y += 1
         forecast_value = max(0.0, round(intercept + slope * (base_idx + k), 2))
-        out.append({
-            "year": y, "month": m,
-            "sold_ap": None,
-            "paid_ap": None,
-            "forecast_paid_ap": forecast_value,
-        })
+        out.append(
+            {
+                "year": y,
+                "month": m,
+                "sold_ap": None,
+                "paid_ap": None,
+                "forecast_paid_ap": forecast_value,
+            }
+        )
     return out
 
 
@@ -512,7 +561,8 @@ def payment_matrix(year: int | None = None, session: Session = Depends(get_sessi
     pay_rows = session.exec(
         select(
             MonthlyCharge.organization_id,
-            MonthlyCharge.year, MonthlyCharge.month,
+            MonthlyCharge.year,
+            MonthlyCharge.month,
             func.coalesce(func.sum(PaymentAllocation.allocated_amount), 0),
         )
         .select_from(PaymentAllocation)
@@ -534,21 +584,28 @@ def payment_matrix(year: int | None = None, session: Session = Depends(get_sessi
             paid = paid_lookup.get((org.id, y, m), 0.0)
             total_paid += paid
             ratio = round(paid / plan * 100, 0) if plan > 0 else None
-            cells.append({
-                "row": oi, "col": mi,
-                "paid": round(paid, 2), "plan": round(plan, 2), "ratio": ratio,
-            })
-        orgs_out.append({
-            "id": str(org.id),
-            "inn": org.inn,
-            "name": org.name_display or org.name_1c,
-            "status": org.status.value if hasattr(org.status, "value") else org.status,
-            "churn_col": churn_col,
-            "churn_month": org.churn_month.isoformat() if org.churn_month else None,
-            "monthly_plan": round(plan, 2),
-            "total_paid_period": round(total_paid, 2),
-            "expected_period": round(plan * len(month_keys), 2),
-        })
+            cells.append(
+                {
+                    "row": oi,
+                    "col": mi,
+                    "paid": round(paid, 2),
+                    "plan": round(plan, 2),
+                    "ratio": ratio,
+                }
+            )
+        orgs_out.append(
+            {
+                "id": str(org.id),
+                "inn": org.inn,
+                "name": org.name_display or org.name_1c,
+                "status": org.status.value if hasattr(org.status, "value") else org.status,
+                "churn_col": churn_col,
+                "churn_month": org.churn_month.isoformat() if org.churn_month else None,
+                "monthly_plan": round(plan, 2),
+                "total_paid_period": round(total_paid, 2),
+                "expected_period": round(plan * len(month_keys), 2),
+            }
+        )
 
     return {
         "months": month_labels,

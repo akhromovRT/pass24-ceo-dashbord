@@ -8,6 +8,7 @@
 
 Метрики собираемости берутся из AR-леджера (monthly_charges + payment_allocations),
 а не из валовых сумм платежей — так же, как в dashboard.py."""
+
 import uuid
 from datetime import date
 from io import BytesIO
@@ -40,7 +41,7 @@ class ReportCriteria(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     period_from: str | None = None  # "YYYY-MM"
-    period_to: str | None = None    # "YYYY-MM"
+    period_to: str | None = None  # "YYYY-MM"
     statuses: list[str] = []
     manager_id: str | None = None
     aging_buckets: list[str] = []
@@ -114,8 +115,18 @@ REPORTS: dict[str, dict] = {
 }
 
 _RU_MONTHS = [
-    "январь", "февраль", "март", "апрель", "май", "июнь",
-    "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь",
+    "январь",
+    "февраль",
+    "март",
+    "апрель",
+    "май",
+    "июнь",
+    "июль",
+    "август",
+    "сентябрь",
+    "октябрь",
+    "ноябрь",
+    "декабрь",
 ]
 
 
@@ -164,9 +175,7 @@ def _filter_orgs(session: Session, c: ReportCriteria) -> list[Organization]:
     if c.manager_id:
         query = query.where(Organization.manager_id == c.manager_id)
     if c.city:
-        query = query.where(
-            func.lower(Organization.city_region).like(f"%{c.city.lower()}%")
-        )
+        query = query.where(func.lower(Organization.city_region).like(f"%{c.city.lower()}%"))
     statuses = [OrgStatus(s) for s in c.statuses if s in OrgStatus._value2member_map_]
     if statuses:
         query = query.where(Organization.status.in_(statuses))  # type: ignore[union-attr]
@@ -186,9 +195,13 @@ def _load_ledger(session: Session, org_ids: list) -> dict:
     if not org_ids:
         return {}
     charge_rows = session.exec(
-        select(MonthlyCharge.id, MonthlyCharge.organization_id,
-               MonthlyCharge.year, MonthlyCharge.month, MonthlyCharge.amount)
-        .where(MonthlyCharge.organization_id.in_(org_ids))  # type: ignore[union-attr]
+        select(
+            MonthlyCharge.id,
+            MonthlyCharge.organization_id,
+            MonthlyCharge.year,
+            MonthlyCharge.month,
+            MonthlyCharge.amount,
+        ).where(MonthlyCharge.organization_id.in_(org_ids))  # type: ignore[union-attr]
     ).all()
     charges: dict = {}
     by_id: dict = {}
@@ -198,8 +211,11 @@ def _load_ledger(session: Session, org_ids: list) -> dict:
         by_id[cid] = rec
 
     alloc_rows = session.exec(
-        select(PaymentAllocation.monthly_charge_id,
-               PaymentAllocation.allocated_amount, Document.doc_date)
+        select(
+            PaymentAllocation.monthly_charge_id,
+            PaymentAllocation.allocated_amount,
+            Document.doc_date,
+        )
         .join(Document, Document.id == PaymentAllocation.payment_document_id)
         .join(MonthlyCharge, MonthlyCharge.id == PaymentAllocation.monthly_charge_id)
         .where(MonthlyCharge.organization_id.in_(org_ids))  # type: ignore[union-attr]
@@ -222,8 +238,7 @@ def _last_payments(session: Session, org_ids: list) -> dict:
         return {}
     rows = session.exec(
         select(Document.organization_id, func.max(Document.doc_date))
-        .where(Document.doc_type == DocType.PAYMENT,
-               Document.organization_id.in_(org_ids))  # type: ignore[union-attr]
+        .where(Document.doc_type == DocType.PAYMENT, Document.organization_id.in_(org_ids))  # type: ignore[union-attr]
         .group_by(Document.organization_id)
     ).all()
     return {oid: d for oid, d in rows if d is not None}
@@ -254,8 +269,9 @@ def _collectability(charges: list, pf, pt, cur) -> float | None:
     return round(collected / accrued * 100, 1)
 
 
-def _sort_rows(rows: list[dict], sort_by: str | None, sort_dir: str,
-               default_key: str) -> list[dict]:
+def _sort_rows(
+    rows: list[dict], sort_by: str | None, sort_dir: str, default_key: str
+) -> list[dict]:
     key = sort_by or default_key
     if rows and key not in rows[0]:
         key = default_key
@@ -277,8 +293,7 @@ def build_debtors_report(session: Session, c: ReportCriteria) -> list[dict]:
     cur = (today.year, today.month)
     pf, pt = _parse_month(c.period_from), _parse_month(c.period_to)
 
-    orgs = [o for o in _filter_orgs(session, c)
-            if _f(o.total_debt) > max(c.min_debt, 0.0)]
+    orgs = [o for o in _filter_orgs(session, c) if _f(o.total_debt) > max(c.min_debt, 0.0)]
     org_ids = [o.id for o in orgs]
     ledger = _load_ledger(session, org_ids)
     last_pay = _last_payments(session, org_ids)
@@ -295,22 +310,24 @@ def build_debtors_report(session: Session, c: ReportCriteria) -> list[dict]:
         score = o.payment_score if o.payment_score is not None else 50
         priority = debt * (1 + min(age_m, 12) * 0.15) * (0.3 + 0.7 * score / 100)
         lp = last_pay.get(o.id)
-        rows.append({
-            "name": o.name_display or o.name_1c,
-            "inn": o.inn,
-            "manager": managers.get(o.manager_id, "—"),
-            "monthly_ap": round(monthly, 2) if monthly else None,
-            "total_debt": round(debt, 2),
-            "months_overdue": age_m,
-            "aging_bucket": bucket,
-            "last_payment_date": lp.isoformat() if lp else None,
-            "collectability": _collectability(ledger.get(o.id, []), pf, pt, cur),
-            "payment_score": o.payment_score,
-            "priority": round(priority, 2),
-            "city": o.city_region or "—",
-            "status": STATUS_LABELS.get(o.status, str(o.status)),
-            "churn_month": _fmt_churn_month(o.churn_month),
-        })
+        rows.append(
+            {
+                "name": o.name_display or o.name_1c,
+                "inn": o.inn,
+                "manager": managers.get(o.manager_id, "—"),
+                "monthly_ap": round(monthly, 2) if monthly else None,
+                "total_debt": round(debt, 2),
+                "months_overdue": age_m,
+                "aging_bucket": bucket,
+                "last_payment_date": lp.isoformat() if lp else None,
+                "collectability": _collectability(ledger.get(o.id, []), pf, pt, cur),
+                "payment_score": o.payment_score,
+                "priority": round(priority, 2),
+                "city": o.city_region or "—",
+                "status": STATUS_LABELS.get(o.status, str(o.status)),
+                "churn_month": _fmt_churn_month(o.churn_month),
+            }
+        )
     return _sort_rows(rows, c.sort_by, c.sort_dir, "priority")
 
 
@@ -336,16 +353,16 @@ def _tendency(charges: list, pf, pt, cur) -> str:
                 current += amt
     if advance == current == arrears == 0:
         return "—"
-    best = max((advance, "аванс"), (current, "в срок"), (arrears, "с просрочкой"),
-               key=lambda t: t[0])
+    best = max(
+        (advance, "аванс"), (current, "в срок"), (arrears, "с просрочкой"), key=lambda t: t[0]
+    )
     return best[1]
 
 
 def _trend(charges: list, pf, pt, cur) -> str:
     """Тренд собираемости: последние 3 месяца периода против 3 предыдущих."""
     months = sorted(
-        (c for c in charges
-         if _in_period((c["year"], c["month"]), pf, pt, cur)),
+        (c for c in charges if _in_period((c["year"], c["month"]), pf, pt, cur)),
         key=lambda c: (c["year"], c["month"]),
     )
     if len(months) < 4:
@@ -373,7 +390,8 @@ def _unpaid_streak(charges: list, cur) -> int:
     """Сколько последних (по текущий месяц) начислений подряд не закрыты."""
     past = sorted(
         (c for c in charges if (c["year"], c["month"]) <= cur),
-        key=lambda c: (c["year"], c["month"]), reverse=True,
+        key=lambda c: (c["year"], c["month"]),
+        reverse=True,
     )
     streak = 0
     for c in past:
@@ -393,10 +411,7 @@ def _on_time_pct(charges: list, pf, pt, cur) -> float | None:
         if not _in_period(ck, pf, pt, cur):
             continue
         total += 1
-        paid_on_time = sum(
-            amt for amt, py, pm in c["allocs"]
-            if py is not None and (py, pm) <= ck
-        )
+        paid_on_time = sum(amt for amt, py, pm in c["allocs"] if py is not None and (py, pm) <= ck)
         if paid_on_time >= c["amount"] - 0.01:
             on_time += 1
     if total == 0:
@@ -420,26 +435,29 @@ def build_discipline_report(session: Session, c: ReportCriteria) -> list[dict]:
     rows: list[dict] = []
     for o in orgs:
         charges = ledger.get(o.id, [])
-        rows.append({
-            "name": o.name_display or o.name_1c,
-            "inn": o.inn,
-            "manager": managers.get(o.manager_id, "—"),
-            "monthly_ap": round(_f(o.monthly_ap), 2),
-            "collectability": _collectability(charges, pf, pt, cur),
-            "on_time": _on_time_pct(charges, pf, pt, cur),
-            "tendency": _tendency(charges, pf, pt, cur),
-            "trend": _trend(charges, pf, pt, cur),
-            "unpaid_streak": _unpaid_streak(charges, cur),
-            "payment_score": o.payment_score,
-            "total_debt": round(_f(o.total_debt), 2),
-            "status": STATUS_LABELS.get(o.status, str(o.status)),
-            "churn_month": _fmt_churn_month(o.churn_month),
-        })
+        rows.append(
+            {
+                "name": o.name_display or o.name_1c,
+                "inn": o.inn,
+                "manager": managers.get(o.manager_id, "—"),
+                "monthly_ap": round(_f(o.monthly_ap), 2),
+                "collectability": _collectability(charges, pf, pt, cur),
+                "on_time": _on_time_pct(charges, pf, pt, cur),
+                "tendency": _tendency(charges, pf, pt, cur),
+                "trend": _trend(charges, pf, pt, cur),
+                "unpaid_streak": _unpaid_streak(charges, cur),
+                "payment_score": o.payment_score,
+                "total_debt": round(_f(o.total_debt), 2),
+                "status": STATUS_LABELS.get(o.status, str(o.status)),
+                "churn_month": _fmt_churn_month(o.churn_month),
+            }
+        )
     # худшие (низкая собираемость) — сверху
     return _sort_rows(rows, c.sort_by, c.sort_dir, "collectability")
 
 
 # --- диспетчер и экспорт ----------------------------------------------------
+
 
 def build_payments_report(session: Session, c: ReportCriteria) -> list[dict]:
     """Реестр платежей за период с фильтрами по контрагентам и диапазону дат.
@@ -473,12 +491,13 @@ def build_payments_report(session: Session, c: ReportCriteria) -> list[dict]:
     # Подтягиваем аллокации одним запросом — для колонки «Зачтено за».
     payment_ids = [d.id for d, _ in pairs]
     alloc_rows = session.exec(
-        select(PaymentAllocation.payment_document_id,
-               MonthlyCharge.year, MonthlyCharge.month,
-               PaymentAllocation.allocated_amount)
-        .join(MonthlyCharge,
-              MonthlyCharge.id == PaymentAllocation.monthly_charge_id,
-              isouter=True)
+        select(
+            PaymentAllocation.payment_document_id,
+            MonthlyCharge.year,
+            MonthlyCharge.month,
+            PaymentAllocation.allocated_amount,
+        )
+        .join(MonthlyCharge, MonthlyCharge.id == PaymentAllocation.monthly_charge_id, isouter=True)
         .where(PaymentAllocation.payment_document_id.in_(payment_ids))  # type: ignore[union-attr]
     ).all()
     alloc_by_pay: dict[uuid.UUID, list[tuple[int, int, float]]] = {}
@@ -492,23 +511,22 @@ def build_payments_report(session: Session, c: ReportCriteria) -> list[dict]:
     def _fmt_periods(items: list[tuple[int, int, float]]) -> str:
         # «04.2026 (12 000 ₽) + 05.2026 (3 000 ₽)»
         items.sort()
-        return " + ".join(
-            f"{m:02d}.{y} ({amt:,.0f} ₽)".replace(",", " ")
-            for y, m, amt in items
-        )
+        return " + ".join(f"{m:02d}.{y} ({amt:,.0f} ₽)".replace(",", " ") for y, m, amt in items)
 
     out: list[dict] = []
     for doc, org in pairs:
         periods = alloc_by_pay.get(doc.id, [])
-        out.append({
-            "doc_date": doc.doc_date.isoformat() if doc.doc_date else None,
-            "org_name": org.name_display or org.name_1c,
-            "inn": org.inn,
-            "amount": _f(doc.amount),
-            "raw_name": doc.raw_name or "",
-            "allocated_periods": _fmt_periods(periods) if periods else "не разнесено",
-            "manager": managers.get(org.manager_id, "") if org.manager_id else "",
-        })
+        out.append(
+            {
+                "doc_date": doc.doc_date.isoformat() if doc.doc_date else None,
+                "org_name": org.name_display or org.name_1c,
+                "inn": org.inn,
+                "amount": _f(doc.amount),
+                "raw_name": doc.raw_name or "",
+                "allocated_periods": _fmt_periods(periods) if periods else "не разнесено",
+                "manager": managers.get(org.manager_id, "") if org.manager_id else "",
+            }
+        )
     return _sort_rows(out, c.sort_by, c.sort_dir, default_key="doc_date")
 
 
@@ -538,8 +556,7 @@ def columns_for(report_type: str, c: ReportCriteria) -> list[tuple[str, str]]:
     return selected or catalog
 
 
-def report_to_xlsx(report_type: str, columns: list[tuple[str, str]],
-                    rows: list[dict]) -> bytes:
+def report_to_xlsx(report_type: str, columns: list[tuple[str, str]], rows: list[dict]) -> bytes:
     """Собирает .xlsx: жирная цветная шапка, заморозка строки заголовков."""
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Font, PatternFill

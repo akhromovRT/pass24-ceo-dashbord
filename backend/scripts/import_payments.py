@@ -5,6 +5,7 @@
 Создаёт PAYMENT-документы на синтетическом контракте 1C-PAYMENTS —
 источник платежей для AR-леджера. После импорта запустить build_ledger.
 """
+
 import hashlib
 import sys
 
@@ -32,8 +33,10 @@ def main() -> None:
     with Session(engine) as session:
         run = ImportService(session).process_payments_report(result, file_hash=file_hash)
         # читаем атрибуты до закрытия сессии (после commit объект expired)
-        summary = (f"Импорт завершён: {run.documents_count} документов, "
-                   f"{run.buyers_count} клиентов, новых {run.new_buyers}")
+        summary = (
+            f"Импорт завершён: {run.documents_count} документов, "
+            f"{run.buyers_count} клиентов, новых {run.new_buyers}"
+        )
     print(summary)
 
 

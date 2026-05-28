@@ -1,6 +1,6 @@
 from dataclasses import dataclass
-from app.models.contract import ContractType
 
+from app.models.contract import ContractType
 
 SUBSCRIPTION_KEYWORDS = ["/П", "/P", "услуг", "оказан", "абонент", "обслужив"]
 EQUIPMENT_KEYWORDS = ["монтаж", "поставк", "оборудов", "установк", "СКУД", "ГРЗ"]
@@ -16,9 +16,7 @@ class ClassificationResult:
     source: str = "auto"
 
 
-def classify_contract(
-    name: str, single_amount: float | None = None
-) -> ClassificationResult:
+def classify_contract(name: str, single_amount: float | None = None) -> ClassificationResult:
     name_upper = name.upper()
 
     for kw in SUBSCRIPTION_KEYWORDS:

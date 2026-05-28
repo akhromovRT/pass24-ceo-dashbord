@@ -8,6 +8,7 @@
 Одна компания может иметь несколько строк — каждая строка = отдельный
 объект (ЖК / КП / БЦ). Группировка по ИНН.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -119,21 +120,25 @@ def parse_registry(file_path: str | Path) -> RegistryParseResult:
         result.total_rows += 1
 
         if not inn:
-            result.skipped_no_inn.append({
-                "row": r,
-                "company": company,
-                "object_name": object_name,
-            })
+            result.skipped_no_inn.append(
+                {
+                    "row": r,
+                    "company": company,
+                    "object_name": object_name,
+                }
+            )
             continue
 
         if len(inn) not in (10, 12):
-            result.skipped_no_inn.append({
-                "row": r,
-                "company": company,
-                "object_name": object_name,
-                "reason": f"invalid_inn_length={len(inn)}",
-                "inn": inn,
-            })
+            result.skipped_no_inn.append(
+                {
+                    "row": r,
+                    "company": company,
+                    "object_name": object_name,
+                    "reason": f"invalid_inn_length={len(inn)}",
+                    "inn": inn,
+                }
+            )
             continue
 
         # Get or create company entry

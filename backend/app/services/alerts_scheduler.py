@@ -11,6 +11,7 @@
 Идемпотентность: перед созданием алерта проверяем, нет ли уже OPEN-алерта
 того же type+organization — если есть, не дублируем.
 """
+
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
@@ -18,35 +19,57 @@ from datetime import UTC, date, datetime, timedelta
 from sqlmodel import Session, func, select
 
 from app.models import (
-    Alert, AlertSeverity, AlertStatus, AlertType,
-    DocType, Document, MonthlyCharge, Organization, OrgStatus,
+    Alert,
+    AlertSeverity,
+    AlertStatus,
+    AlertType,
+    DocType,
+    Document,
+    MonthlyCharge,
+    Organization,
+    OrgStatus,
     PaymentAllocation,
 )
 
 
 def _has_open_alert(
-    session: Session, organization_id, alert_type: AlertType,
+    session: Session,
+    organization_id,
+    alert_type: AlertType,
 ) -> bool:
-    stmt = select(Alert.id).where(
-        Alert.organization_id == organization_id,
-        Alert.alert_type == alert_type,
-        Alert.status == AlertStatus.OPEN,
-    ).limit(1)
+    stmt = (
+        select(Alert.id)
+        .where(
+            Alert.organization_id == organization_id,
+            Alert.alert_type == alert_type,
+            Alert.status == AlertStatus.OPEN,
+        )
+        .limit(1)
+    )
     return session.exec(stmt).first() is not None
 
 
 def _create(
-    session: Session, *, org, alert_type: AlertType,
-    severity: AlertSeverity, title: str, description: str | None = None,
-    metric_value: float | None = None, threshold: float | None = None,
+    session: Session,
+    *,
+    org,
+    alert_type: AlertType,
+    severity: AlertSeverity,
+    title: str,
+    description: str | None = None,
+    metric_value: float | None = None,
+    threshold: float | None = None,
 ) -> Alert | None:
     if _has_open_alert(session, org.id if org else None, alert_type):
         return None
     a = Alert(
         organization_id=org.id if org else None,
-        alert_type=alert_type, severity=severity,
-        title=title, description=description,
-        metric_value=metric_value, threshold=threshold,
+        alert_type=alert_type,
+        severity=severity,
+        title=title,
+        description=description,
+        metric_value=metric_value,
+        threshold=threshold,
     )
     session.add(a)
     return a
@@ -77,12 +100,16 @@ def check_overdue(session: Session) -> int:
         if days < 30:
             continue
         severity = (
-            AlertSeverity.CRITICAL if days >= 90
-            else AlertSeverity.WARNING if days >= 60
+            AlertSeverity.CRITICAL
+            if days >= 90
+            else AlertSeverity.WARNING
+            if days >= 60
             else AlertSeverity.INFO
         )
         if _create(
-            session, org=o, alert_type=AlertType.NON_PAYMENT,
+            session,
+            org=o,
+            alert_type=AlertType.NON_PAYMENT,
             severity=severity,
             title=f"Просрочка {days} дн: {o.name_display or o.name_1c}",
             description=(
@@ -110,7 +137,9 @@ def check_unassigned(session: Session) -> int:
     ).all()
     for o in orgs:
         if _create(
-            session, org=o, alert_type=AlertType.UNASSIGNED_CLIENT,
+            session,
+            org=o,
+            alert_type=AlertType.UNASSIGNED_CLIENT,
             severity=AlertSeverity.WARNING,
             title=f"Без менеджера: {o.name_display or o.name_1c}",
             description="Активный клиент в реестре более 14 дней без manager_id",
@@ -124,10 +153,8 @@ def check_churn_risk(session: Session) -> int:
     today = date.today()
     cutoff_y, cutoff_m = today.year, today.month
     # 2 предыдущих месяца — самый понятный сигнал
-    prev1_y, prev1_m = ((cutoff_y, cutoff_m - 1) if cutoff_m > 1
-                        else (cutoff_y - 1, 12))
-    prev2_y, prev2_m = ((prev1_y, prev1_m - 1) if prev1_m > 1
-                        else (prev1_y - 1, 12))
+    prev1_y, prev1_m = (cutoff_y, cutoff_m - 1) if cutoff_m > 1 else (cutoff_y - 1, 12)
+    prev2_y, prev2_m = (prev1_y, prev1_m - 1) if prev1_m > 1 else (prev1_y - 1, 12)
     created = 0
     orgs = session.exec(
         select(Organization).where(
@@ -137,14 +164,14 @@ def check_churn_risk(session: Session) -> int:
     ).all()
     for o in orgs:
         # Считаем монтхли-чарджи за prev1 и prev2, и сумму аллокаций
-        for (y, m) in [(prev1_y, prev1_m), (prev2_y, prev2_m)]:
+        for y, m in [(prev1_y, prev1_m), (prev2_y, prev2_m)]:
             paid = session.exec(
                 select(func.coalesce(func.sum(PaymentAllocation.allocated_amount), 0))
-                .join(MonthlyCharge,
-                      MonthlyCharge.id == PaymentAllocation.monthly_charge_id)
+                .join(MonthlyCharge, MonthlyCharge.id == PaymentAllocation.monthly_charge_id)
                 .where(
                     MonthlyCharge.organization_id == o.id,
-                    MonthlyCharge.year == y, MonthlyCharge.month == m,
+                    MonthlyCharge.year == y,
+                    MonthlyCharge.month == m,
                 )
             ).one()
             if float(paid or 0) > 0:
@@ -152,7 +179,9 @@ def check_churn_risk(session: Session) -> int:
         else:
             # Ни за prev1, ни за prev2 нет аллокаций — churn risk.
             if _create(
-                session, org=o, alert_type=AlertType.CHURN_RISK,
+                session,
+                org=o,
+                alert_type=AlertType.CHURN_RISK,
                 severity=AlertSeverity.WARNING,
                 title=f"Не платит 2 месяца: {o.name_display or o.name_1c}",
                 description=f"Нет аллокаций за {prev2_m:02d}.{prev2_y} и {prev1_m:02d}.{prev1_y}",

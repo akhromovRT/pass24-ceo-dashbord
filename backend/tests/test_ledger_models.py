@@ -32,14 +32,20 @@ def test_tariff_period_persists(db_session):
 def test_monthly_charge_unique_period(db_session):
     org_id = uuid.uuid4()
     c1 = MonthlyCharge(
-        organization_id=org_id, year=2026, month=3,
-        amount=Decimal("12100.00"), source=ChargeSource.SYNTHETIC_TARIFF,
+        organization_id=org_id,
+        year=2026,
+        month=3,
+        amount=Decimal("12100.00"),
+        source=ChargeSource.SYNTHETIC_TARIFF,
     )
     db_session.add(c1)
     db_session.commit()
     c2 = MonthlyCharge(
-        organization_id=org_id, year=2026, month=3,
-        amount=Decimal("12100.00"), source=ChargeSource.SYNTHETIC_TARIFF,
+        organization_id=org_id,
+        year=2026,
+        month=3,
+        amount=Decimal("12100.00"),
+        source=ChargeSource.SYNTHETIC_TARIFF,
     )
     db_session.add(c2)
     with pytest.raises(IntegrityError):

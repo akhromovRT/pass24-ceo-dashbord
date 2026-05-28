@@ -1,4 +1,5 @@
 """API-тесты для /debt-snapshots (этап 3 UI «1С-вид»)."""
+
 from datetime import date
 from decimal import Decimal
 
@@ -8,11 +9,16 @@ from sqlmodel import Session
 from app.core.database import get_session
 from app.main import app
 from app.models import (
-    DebtorWorkflow, DebtorWorkflowStatus, DebtSnapshot, DebtSnapshotLevel,
-    DebtSnapshotRow, Organization, OrgStatus,
+    DebtorWorkflow,
+    DebtorWorkflowStatus,
+    Organization,
+    OrgStatus,
 )
 from app.parser.debt_report import (
-    ParsedBuyer, ParsedContract, ParsedDocument, ParseResult,
+    ParsedBuyer,
+    ParsedContract,
+    ParsedDocument,
+    ParseResult,
 )
 from app.services.import_service import ImportService
 
@@ -23,11 +29,13 @@ def _auth_user_stub():
         id = "00000000-0000-0000-0000-000000000001"
         email = "test@x"
         role = "admin"
+
     return _U()
 
 
 def _client_with_session(db_session: Session) -> TestClient:
     from app.api.v1.auth import get_current_user
+
     app.dependency_overrides[get_session] = lambda: db_session
     app.dependency_overrides[get_current_user] = _auth_user_stub
     return TestClient(app)
@@ -36,26 +44,42 @@ def _client_with_session(db_session: Session) -> TestClient:
 def _seed(db_session: Session) -> str:
     doc = ParsedDocument(
         raw_name="Реализация № 1 от 15.01.2026",
-        doc_type="sale", doc_number="1", doc_date=date(2026, 1, 15),
-        amount=Decimal("10000"), sold=Decimal("10000"), paid=Decimal("10000"),
+        doc_type="sale",
+        doc_number="1",
+        doc_date=date(2026, 1, 15),
+        amount=Decimal("10000"),
+        sold=Decimal("10000"),
+        paid=Decimal("10000"),
     )
     contract = ParsedContract(
         raw_name="Договор № 100 от 01.01.2025",
-        contract_number="100", contract_date=date(2025, 1, 1),
-        sold=Decimal("10000"), paid=Decimal("10000"),
-        debt_end=Decimal("0"), advance_end=Decimal("2000"),
+        contract_number="100",
+        contract_date=date(2025, 1, 1),
+        sold=Decimal("10000"),
+        paid=Decimal("10000"),
+        debt_end=Decimal("0"),
+        advance_end=Decimal("2000"),
         documents=[doc],
     )
     buyer = ParsedBuyer(
-        name="ООО ТЕСТ", inn="7700000001",
-        debt_start=Decimal("3000"), sold=Decimal("10000"), paid=Decimal("10000"),
-        debt_end=Decimal("0"), advance_end=Decimal("2000"),
+        name="ООО ТЕСТ",
+        inn="7700000001",
+        debt_start=Decimal("3000"),
+        sold=Decimal("10000"),
+        paid=Decimal("10000"),
+        debt_end=Decimal("0"),
+        advance_end=Decimal("2000"),
         contracts=[contract],
     )
     pr = ParseResult(
-        filename="test.xlsx", file_hash="c" * 64,
-        period_start=date(2026, 1, 1), period_end=date(2026, 1, 31),
-        total_rows=3, buyers_count=1, contracts_count=1, documents_count=1,
+        filename="test.xlsx",
+        file_hash="c" * 64,
+        period_start=date(2026, 1, 1),
+        period_end=date(2026, 1, 31),
+        total_rows=3,
+        buyers_count=1,
+        contracts_count=1,
+        documents_count=1,
         buyers=[buyer],
     )
     svc = ImportService(db_session)
@@ -115,9 +139,7 @@ class TestDiffDetection:
     def test_diff_when_db_total_debt_diverges(self, db_session: Session):
         _seed(db_session)
         # Симулируем дрейф: вручную меняем Organization.total_debt после импорта.
-        org = db_session.query(Organization).filter(
-            Organization.inn == "7700000001"
-        ).one()
+        org = db_session.query(Organization).filter(Organization.inn == "7700000001").one()
         org.total_debt = Decimal("12345.67")
         db_session.add(org)
         db_session.commit()
@@ -141,14 +163,14 @@ class TestWorkflowInResponse:
     def test_workflow_attached_to_buyer(self, db_session: Session):
         _seed(db_session)
         # Засеваем workflow для нашего ЮЛ.
-        org = db_session.query(Organization).filter(
-            Organization.inn == "7700000001"
-        ).one()
-        db_session.add(DebtorWorkflow(
-            organization_id=org.id,
-            status=DebtorWorkflowStatus.IN_PROGRESS,
-            comment="Звонил 27.05, обещают оплату",
-        ))
+        org = db_session.query(Organization).filter(Organization.inn == "7700000001").one()
+        db_session.add(
+            DebtorWorkflow(
+                organization_id=org.id,
+                status=DebtorWorkflowStatus.IN_PROGRESS,
+                comment="Звонил 27.05, обещают оплату",
+            )
+        )
         db_session.commit()
 
         client = _client_with_session(db_session)
@@ -211,9 +233,7 @@ class TestOnlyRegularFilter:
         _mark_in_registry(db_session, "7700000001")
         # Меняем active на CHURNED — теперь org_statuses=active должен дать пусто,
         # а only_regular=true (active+suspended+churned) — оставить.
-        org = db_session.query(Organization).filter(
-            Organization.inn == "7700000001"
-        ).one()
+        org = db_session.query(Organization).filter(Organization.inn == "7700000001").one()
         org.status = OrgStatus.CHURNED
         db_session.add(org)
         db_session.commit()
@@ -221,20 +241,20 @@ class TestOnlyRegularFilter:
         client = _client_with_session(db_session)
         try:
             # only_regular=true — CHURNED проходит, rows есть
-            r = client.get("/api/v1/debt-snapshots/latest",
-                           params={"only_regular": "true"})
+            r = client.get("/api/v1/debt-snapshots/latest", params={"only_regular": "true"})
             assert len(r.json()["rows"]) == 3
 
             # org_statuses=active — CHURNED отсекается, пусто
-            r = client.get("/api/v1/debt-snapshots/latest",
-                           params={"org_statuses": "active"})
+            r = client.get("/api/v1/debt-snapshots/latest", params={"org_statuses": "active"})
             d = r.json()
             assert d["rows"] == []
             assert d["org_statuses"] == ["active"]
 
             # org_statuses приоритетнее only_regular
-            r = client.get("/api/v1/debt-snapshots/latest",
-                           params={"org_statuses": "active", "only_regular": "true"})
+            r = client.get(
+                "/api/v1/debt-snapshots/latest",
+                params={"org_statuses": "active", "only_regular": "true"},
+            )
             assert r.json()["rows"] == []
         finally:
             app.dependency_overrides.clear()

@@ -1,4 +1,5 @@
 """API модуля «Отчёты»: preview, экспорт в Excel, CRUD сохранённых шаблонов."""
+
 import uuid
 from datetime import date
 

@@ -2,8 +2,8 @@ import enum
 import uuid
 from datetime import UTC, date, datetime
 
-from sqlmodel import Column, Field, SQLModel
 from sqlalchemy import JSON
+from sqlmodel import Column, Field, SQLModel
 
 
 class ImportStatus(str, enum.Enum):

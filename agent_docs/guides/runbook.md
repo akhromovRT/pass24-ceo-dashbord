@@ -11,9 +11,11 @@
 | UI | https://ceo.pass24pro.ru |
 | Логин | `admin@onvi-service.ru` (пароль — `~/.config/ceo24/credentials`, chmod 600, не в репо) |
 | Compose-директория | `/root/pass24-ceo-dashbord/` |
-| Backups директория на сервере | `/srv/ceo24/backups/` |
+| Backups директория на сервере | `/srv/ceo24/backups/` (ретеншн 14 дней) |
 | Backups локально (зеркало) | `~/Backups/ceo24/` (pull в 05:00 через launchd) |
+| Backups offsite S3 | `s3://pass24-backups/ceo24/` (TimeWeb, ретеншн 30 дней) |
 | Логи бэкапа на сервере | `/var/log/ceo24-backup.log` |
+| Секреты S3 | `/etc/ceo24/backup-s3.env` (root:root 600) |
 
 ## Сайт не открывается — что делать
 
@@ -79,6 +81,16 @@ curl -sI https://ceo.pass24pro.ru/
 ```bash
 scp ~/Backups/ceo24/ceo24-<latest>.dump.gz ceo24:/tmp/
 ssh ceo24 'gunzip < /tmp/ceo24-<latest>.dump.gz | docker exec -i $(docker ps -qf name=db) pg_restore -U ceo24 -d ceo24 --clean --if-exists --no-owner'
+```
+
+Если погиб и сервер, и ноут — забрать дамп из S3:
+
+```bash
+# на любой машине с aws-cli и ключами из /etc/ceo24/backup-s3.env
+set -a; source /etc/ceo24/backup-s3.env; set +a
+aws --endpoint-url="$S3_ENDPOINT" s3 ls "s3://$S3_BUCKET/ceo24/" | sort | tail -3
+aws --endpoint-url="$S3_ENDPOINT" s3 cp "s3://$S3_BUCKET/ceo24/<latest>" /tmp/
+# дальше — обычный pg_restore из шагов выше
 ```
 
 ## Снять дамп вручную (вне cron-расписания)
@@ -261,7 +273,8 @@ curl -sS -X POST https://ceo.pass24pro.ru/api/v1/auth/change-password \
 | Healthcheck db | `pg_isready` каждые 10 сек |
 | Лог-ротация | 10 MB × 3 файла на каждый сервис |
 | Swap | 2 GB, swappiness=10 (в /etc/sysctl.conf и /etc/fstab) |
-| Бэкап | ежедневно в 03:00 UTC, ретеншн 14 дней |
+| Бэкап локальный | ежедневно в 03:00 UTC, ретеншн 14 дней |
+| Бэкап offsite S3 | в том же запуске после локального дампа, ретеншн 30 дней |
 | Pull на ноут | ежедневно в 05:00 локального через launchd |
 
 ## Где что лежит на сервере
@@ -270,8 +283,9 @@ curl -sS -X POST https://ceo.pass24pro.ru/api/v1/auth/change-password \
 /root/pass24-ceo-dashbord/    # git checkout, docker-compose.yml
 /srv/ceo24/pgdata/             # PostgreSQL data (bind mount в контейнер db)
 /srv/ceo24/backups/            # ежедневные дампы (.dump.gz)
-/usr/local/bin/ceo24-backup.sh # скрипт бэкапа
+/usr/local/bin/ceo24-backup.sh # скрипт бэкапа (локальный + S3 offsite)
 /etc/cron.d/ceo24-backup       # cron-задача
-/var/log/ceo24-backup.log      # лог бэкапов
+/etc/ceo24/backup-s3.env       # ключи TimeWeb S3 (chmod 600)
+/var/log/ceo24-backup.log      # лог бэкапов (строки OK local / OK s3)
 /swapfile                       # 2 GB swap
 ```

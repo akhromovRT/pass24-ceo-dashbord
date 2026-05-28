@@ -1,7 +1,7 @@
 """API-тесты для /debtor-workflow (статус проработки + комментарий)."""
-from datetime import date
-from decimal import Decimal
+
 import uuid
+from decimal import Decimal
 
 from fastapi.testclient import TestClient
 from sqlmodel import Session
@@ -9,14 +9,22 @@ from sqlmodel import Session
 from app.core.database import get_session
 from app.main import app
 from app.models import (
-    DebtorWorkflow, DebtorWorkflowStatus, Organization, OrgStatus, User, UserRole,
+    DebtorWorkflow,
+    DebtorWorkflowStatus,
+    Organization,
+    OrgStatus,
+    User,
+    UserRole,
 )
 
 
 def _seed_user(db_session: Session) -> User:
     u = User(
-        name="Test User", email="t@x", hashed_password="h",
-        role=UserRole.ADMIN, is_active=True,
+        name="Test User",
+        email="t@x",
+        hashed_password="h",
+        role=UserRole.ADMIN,
+        is_active=True,
     )
     db_session.add(u)
     db_session.commit()
@@ -26,8 +34,11 @@ def _seed_user(db_session: Session) -> User:
 
 def _seed_org(db_session: Session) -> Organization:
     o = Organization(
-        inn="7700000777", name_1c="ООО ВОРКФЛОУ", status=OrgStatus.ACTIVE,
-        in_registry=True, total_debt=Decimal("12345"),
+        inn="7700000777",
+        name_1c="ООО ВОРКФЛОУ",
+        status=OrgStatus.ACTIVE,
+        in_registry=True,
+        total_debt=Decimal("12345"),
     )
     db_session.add(o)
     db_session.commit()
@@ -37,6 +48,7 @@ def _seed_org(db_session: Session) -> Organization:
 
 def _client_with(db_session: Session, user: User) -> TestClient:
     from app.api.v1.auth import get_current_user
+
     app.dependency_overrides[get_session] = lambda: db_session
     app.dependency_overrides[get_current_user] = lambda: user
     return TestClient(app)

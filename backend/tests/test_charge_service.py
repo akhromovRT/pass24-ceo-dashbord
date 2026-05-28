@@ -4,8 +4,8 @@ from decimal import Decimal
 from app.models import (
     Contract,
     ContractType,
-    Document,
     DocType,
+    Document,
     Organization,
     OrgStatus,
     TariffPeriod,
@@ -15,8 +15,9 @@ from app.services.charge_service import ChargeService
 
 
 def _org(session, monthly_ap="10000"):
-    org = Organization(inn="7700000001", name_1c="Тест", status=OrgStatus.ACTIVE,
-                       monthly_ap=Decimal(monthly_ap))
+    org = Organization(
+        inn="7700000001", name_1c="Тест", status=OrgStatus.ACTIVE, monthly_ap=Decimal(monthly_ap)
+    )
     session.add(org)
     session.flush()
     return org
@@ -24,8 +25,11 @@ def _org(session, monthly_ap="10000"):
 
 def test_synthetic_charges_from_tariff(db_session):
     org = _org(db_session)
-    db_session.add(TariffPeriod(organization_id=org.id, valid_from=date(2026, 1, 1),
-                                monthly_amount=Decimal("10000")))
+    db_session.add(
+        TariffPeriod(
+            organization_id=org.id, valid_from=date(2026, 1, 1), monthly_amount=Decimal("10000")
+        )
+    )
     db_session.commit()
     svc = ChargeService(db_session)
     svc.rebuild_for_organization(org.id, start=date(2026, 1, 1), through=date(2026, 3, 31))
@@ -37,15 +41,25 @@ def test_synthetic_charges_from_tariff(db_session):
 
 def test_realization_overrides_synthetic(db_session):
     org = _org(db_session)
-    db_session.add(TariffPeriod(organization_id=org.id, valid_from=date(2026, 1, 1),
-                                monthly_amount=Decimal("10000")))
-    c = Contract(organization_id=org.id, contract_type=ContractType.SUBSCRIPTION,
-                 raw_name="Договор подписки")
+    db_session.add(
+        TariffPeriod(
+            organization_id=org.id, valid_from=date(2026, 1, 1), monthly_amount=Decimal("10000")
+        )
+    )
+    c = Contract(
+        organization_id=org.id, contract_type=ContractType.SUBSCRIPTION, raw_name="Договор подписки"
+    )
     db_session.add(c)
     db_session.flush()
-    db_session.add(Document(contract_id=c.id, organization_id=org.id,
-                            doc_type=DocType.SALE, doc_date=date(2026, 2, 1),
-                            amount=Decimal("11500")))
+    db_session.add(
+        Document(
+            contract_id=c.id,
+            organization_id=org.id,
+            doc_type=DocType.SALE,
+            doc_date=date(2026, 2, 1),
+            amount=Decimal("11500"),
+        )
+    )
     db_session.commit()
     svc = ChargeService(db_session)
     svc.rebuild_for_organization(org.id, start=date(2026, 1, 1), through=date(2026, 3, 31))
@@ -57,15 +71,25 @@ def test_realization_overrides_synthetic(db_session):
 
 def test_charge_range_from_first_activity(db_session):
     org = _org(db_session)
-    db_session.add(TariffPeriod(organization_id=org.id, valid_from=date(2025, 11, 1),
-                                monthly_amount=Decimal("10000")))
-    c = Contract(organization_id=org.id, contract_type=ContractType.SUBSCRIPTION,
-                 raw_name="Договор")
+    db_session.add(
+        TariffPeriod(
+            organization_id=org.id, valid_from=date(2025, 11, 1), monthly_amount=Decimal("10000")
+        )
+    )
+    c = Contract(
+        organization_id=org.id, contract_type=ContractType.SUBSCRIPTION, raw_name="Договор"
+    )
     db_session.add(c)
     db_session.flush()
-    db_session.add(Document(contract_id=c.id, organization_id=org.id,
-                            doc_type=DocType.SALE, doc_date=date(2025, 12, 1),
-                            amount=Decimal("10000")))
+    db_session.add(
+        Document(
+            contract_id=c.id,
+            organization_id=org.id,
+            doc_type=DocType.SALE,
+            doc_date=date(2025, 12, 1),
+            amount=Decimal("10000"),
+        )
+    )
     db_session.commit()
     svc = ChargeService(db_session)
     start = svc.charge_start(org.id)

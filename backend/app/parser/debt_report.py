@@ -6,8 +6,6 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-import openpyxl
-
 from app.parser.utils import load_workbook_any
 
 
@@ -45,22 +43,40 @@ _BARE_CONTRACT_RE = re.compile(
 )
 
 _MONTHS = {
-    "январь": 1, "февраль": 2, "март": 3, "апрель": 4,
-    "май": 5, "июнь": 6, "июль": 7, "август": 8,
-    "сентябрь": 9, "октябрь": 10, "ноябрь": 11, "декабрь": 12,
+    "январь": 1,
+    "февраль": 2,
+    "март": 3,
+    "апрель": 4,
+    "май": 5,
+    "июнь": 6,
+    "июль": 7,
+    "август": 8,
+    "сентябрь": 9,
+    "октябрь": 10,
+    "ноябрь": 11,
+    "декабрь": 12,
 }
 
 
 # Префиксы, по которым строка явно классифицируется как уровень CONTRACT.
 # Все варианты «доп* согл*» нормализуем до канонической формы перед сравнением.
 _CONTRACT_PREFIXES = (
-    "договор", "основной договор",
-    "соглашение", "допсоглашение", "допсогл", "дс ",
+    "договор",
+    "основной договор",
+    "соглашение",
+    "допсоглашение",
+    "допсогл",
+    "дс ",
     "дополнительное соглашение",
-    "счет на оплату", "счёт на оплату",
-    "счет-оферта", "счёт-оферта",
-    "счет ", "счёт ",
-    "сч ", "бн от", "бн  от",
+    "счет на оплату",
+    "счёт на оплату",
+    "счет-оферта",
+    "счёт-оферта",
+    "счет ",
+    "счёт ",
+    "сч ",
+    "бн от",
+    "бн  от",
     "без договора",
 )
 # Номер договора, начинающийся сразу с цифры/№ — без префикса «Договор»:
@@ -104,11 +120,16 @@ def detect_level(name: str, inn_cell: str) -> HierarchyLevel:
 
     # Документы — Реализация, Поступление, Корректировка долга/реализации,
     # Списание задолженности, Возврат товаров.
-    if name_lower.startswith((
-        "реализация", "поступление",
-        "корректировка долга", "корректировка реализации",
-        "списание задолженности", "возврат товаров",
-    )):
+    if name_lower.startswith(
+        (
+            "реализация",
+            "поступление",
+            "корректировка долга",
+            "корректировка реализации",
+            "списание задолженности",
+            "возврат товаров",
+        )
+    ):
         return HierarchyLevel.DOCUMENT
 
     # Договоры. Сначала нормализуем «Доп* согл*» к канонической форме, потом
@@ -191,6 +212,7 @@ def _parse_period(text: str) -> tuple[date | None, date | None]:
     else:
         end = date(year_end, month_end + 1, 1).replace(day=1)
         from datetime import timedelta
+
         end = end - timedelta(days=1)
     return start, end
 
@@ -360,9 +382,7 @@ def parse_debt_report(file_path: str | Path) -> ParseResult:
 
     result.buyers_count = len(result.buyers)
     result.contracts_count = sum(len(b.contracts) for b in result.buyers)
-    result.documents_count = sum(
-        len(c.documents) for b in result.buyers for c in b.contracts
-    )
+    result.documents_count = sum(len(c.documents) for b in result.buyers for c in b.contracts)
 
     wb.close()
     return result

@@ -1,4 +1,5 @@
 """Backfill: построение AR-леджера по существующим данным. Идемпотентно."""
+
 from datetime import date
 
 from sqlmodel import Session, select
@@ -13,8 +14,9 @@ def _seed_tariffs(session: Session) -> int:
     """По строке tariff_period на клиента с monthly_ap > 0, если ещё нет."""
     created = 0
     orgs = session.exec(
-        select(Organization).where(Organization.monthly_ap.is_not(None),
-                                   Organization.monthly_ap > 0)
+        select(Organization).where(
+            Organization.monthly_ap.is_not(None), Organization.monthly_ap > 0
+        )
     ).all()
     for org in orgs:
         exists = session.exec(
@@ -23,8 +25,9 @@ def _seed_tariffs(session: Session) -> int:
         if exists:
             continue
         start = ChargeService(session).charge_start(org.id) or date(2024, 1, 1)
-        session.add(TariffPeriod(organization_id=org.id, valid_from=start,
-                                 monthly_amount=org.monthly_ap))
+        session.add(
+            TariffPeriod(organization_id=org.id, valid_from=start, monthly_amount=org.monthly_ap)
+        )
         created += 1
     session.flush()
     return created
@@ -34,8 +37,7 @@ def _refresh_payment_periods(session: Session) -> int:
     """Переизвлекает period_year/period_month у банк-платежей по raw_name."""
     updated = 0
     payments = session.exec(
-        select(Document).where(Document.doc_type == DocType.PAYMENT,
-                               Document.amount > 0)
+        select(Document).where(Document.doc_type == DocType.PAYMENT, Document.amount > 0)
     ).all()
     for d in payments:
         ep = extract_periods(d.raw_name or "", d.doc_date or date.today())
@@ -66,5 +68,4 @@ def build_ledger(session: Session) -> dict:
         alloc_svc.recompute_for_organization(org.id)
         rebuilt += 1
     session.commit()
-    return {"tariffs_seeded": tariffs, "payments_refreshed": refreshed,
-            "orgs_rebuilt": rebuilt}
+    return {"tariffs_seeded": tariffs, "payments_refreshed": refreshed, "orgs_rebuilt": rebuilt}

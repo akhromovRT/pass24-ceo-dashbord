@@ -12,13 +12,13 @@ Create Date: 2026-05-28 11:00:00.000000
 PostgreSQL ALTER TYPE ... ADD VALUE — нельзя в транзакции, поэтому
 op.execute(...) с autocommit_block.
 """
+
 from typing import Sequence, Union
 
 from alembic import op
 
-
-revision: str = 'c8a5b3d1e7f2'
-down_revision: Union[str, Sequence[str], None] = 'b7c4e2f1a890'
+revision: str = "c8a5b3d1e7f2"
+down_revision: Union[str, Sequence[str], None] = "b7c4e2f1a890"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
@@ -29,7 +29,7 @@ def upgrade() -> None:
     # В БД enum doctype хранится с именами в UPPER (SALE/PAYMENT/...),
     # потому что SQLAlchemy для (str, enum.Enum) берёт имя атрибута, не value.
     with op.get_context().autocommit_block():
-        for value in ('CORRECTION', 'WRITEOFF', 'REFUND'):
+        for value in ("CORRECTION", "WRITEOFF", "REFUND"):
             op.execute(f"ALTER TYPE doctype ADD VALUE IF NOT EXISTS '{value}'")
 
 

@@ -81,9 +81,7 @@ def login(
 ):
     ip = request.client.host if request.client else "unknown"
     _check_login_rate_limit(ip)
-    user = session.exec(
-        select(User).where(User.email == form_data.username)
-    ).first()
+    user = session.exec(select(User).where(User.email == form_data.username)).first()
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

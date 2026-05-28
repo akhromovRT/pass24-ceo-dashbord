@@ -32,8 +32,9 @@ def client(db_session: Session):
         yield db_session
 
     def override_get_current_user():
-        return User(name="T", email="t@t.ru", hashed_password="x",
-                    role=UserRole.ADMIN, is_active=True)
+        return User(
+            name="T", email="t@t.ru", hashed_password="x", role=UserRole.ADMIN, is_active=True
+        )
 
     app.dependency_overrides[get_session] = override_get_session
     app.dependency_overrides[get_current_user] = override_get_current_user
@@ -52,34 +53,45 @@ def _org(session: Session, inn: str, name: str = "Org", **kw) -> Organization:
     return org
 
 
-def _charge(session: Session, org: Organization, year: int, month: int,
-            amount: float) -> MonthlyCharge:
-    charge = MonthlyCharge(organization_id=org.id, year=year, month=month,
-                           amount=Decimal(str(amount)),
-                           source=ChargeSource.SYNTHETIC_TARIFF)
+def _charge(
+    session: Session, org: Organization, year: int, month: int, amount: float
+) -> MonthlyCharge:
+    charge = MonthlyCharge(
+        organization_id=org.id,
+        year=year,
+        month=month,
+        amount=Decimal(str(amount)),
+        source=ChargeSource.SYNTHETIC_TARIFF,
+    )
     session.add(charge)
     session.commit()
     session.refresh(charge)
     return charge
 
 
-def _pay(session: Session, org: Organization, charge: MonthlyCharge,
-         amount: float, pay_date: date) -> None:
-    contract = Contract(organization_id=org.id,
-                        contract_type=ContractType.SUBSCRIPTION)
+def _pay(
+    session: Session, org: Organization, charge: MonthlyCharge, amount: float, pay_date: date
+) -> None:
+    contract = Contract(organization_id=org.id, contract_type=ContractType.SUBSCRIPTION)
     session.add(contract)
     session.commit()
     session.refresh(contract)
-    doc = Document(contract_id=contract.id, organization_id=org.id,
-                   doc_type=DocType.PAYMENT, doc_date=pay_date,
-                   amount=Decimal(str(amount)))
+    doc = Document(
+        contract_id=contract.id,
+        organization_id=org.id,
+        doc_type=DocType.PAYMENT,
+        doc_date=pay_date,
+        amount=Decimal(str(amount)),
+    )
     session.add(doc)
     session.commit()
     session.refresh(doc)
-    alloc = PaymentAllocation(payment_document_id=doc.id,
-                              monthly_charge_id=charge.id,
-                              allocated_amount=Decimal(str(amount)),
-                              basis=AllocationBasis.EXPLICIT_PERIOD)
+    alloc = PaymentAllocation(
+        payment_document_id=doc.id,
+        monthly_charge_id=charge.id,
+        allocated_amount=Decimal(str(amount)),
+        basis=AllocationBasis.EXPLICIT_PERIOD,
+    )
     session.add(alloc)
     session.commit()
 
@@ -88,9 +100,15 @@ def _pay(session: Session, org: Organization, charge: MonthlyCharge,
 
 
 def test_debtors_preview_returns_rows_and_columns(client, db_session: Session):
-    _org(db_session, "7700000001", name="Должник",
-         status=OrgStatus.ACTIVE, monthly_ap=Decimal("10000"),
-         total_debt=Decimal("45000"), payment_score=60)
+    _org(
+        db_session,
+        "7700000001",
+        name="Должник",
+        status=OrgStatus.ACTIVE,
+        monthly_ap=Decimal("10000"),
+        total_debt=Decimal("45000"),
+        payment_score=60,
+    )
     resp = client.post("/api/v1/reports/debtors/preview", json={})
     assert resp.status_code == 200
     body = resp.json()
@@ -106,8 +124,7 @@ def test_debtors_preview_returns_rows_and_columns(client, db_session: Session):
 def test_debtors_min_debt_filter(client, db_session: Session):
     _org(db_session, "7700000010", name="Мелкий", total_debt=Decimal("5000"))
     _org(db_session, "7700000011", name="Крупный", total_debt=Decimal("80000"))
-    resp = client.post("/api/v1/reports/debtors/preview",
-                        json={"min_debt": 10000})
+    resp = client.post("/api/v1/reports/debtors/preview", json={"min_debt": 10000})
     assert resp.status_code == 200
     rows = resp.json()["rows"]
     assert len(rows) == 1
@@ -117,16 +134,16 @@ def test_debtors_min_debt_filter(client, db_session: Session):
 def test_debtors_sort_ascending(client, db_session: Session):
     _org(db_session, "7700000020", name="A", total_debt=Decimal("30000"))
     _org(db_session, "7700000021", name="B", total_debt=Decimal("90000"))
-    resp = client.post("/api/v1/reports/debtors/preview",
-                        json={"sort_by": "total_debt", "sort_dir": "asc"})
+    resp = client.post(
+        "/api/v1/reports/debtors/preview", json={"sort_by": "total_debt", "sort_dir": "asc"}
+    )
     rows = resp.json()["rows"]
     assert [r["total_debt"] for r in rows] == [30000.0, 90000.0]
 
 
 def test_debtors_column_selection(client, db_session: Session):
     _org(db_session, "7700000030", name="X", total_debt=Decimal("12000"))
-    resp = client.post("/api/v1/reports/debtors/preview",
-                        json={"columns": ["name", "total_debt"]})
+    resp = client.post("/api/v1/reports/debtors/preview", json={"columns": ["name", "total_debt"]})
     cols = [c["key"] for c in resp.json()["columns"]]
     assert cols == ["name", "total_debt"]
 
@@ -136,8 +153,13 @@ def test_debtors_column_selection(client, db_session: Session):
 
 def test_discipline_preview_computes_collectability(client, db_session: Session):
     today = date.today()
-    org = _org(db_session, "7700000040", name="Подписчик",
-               status=OrgStatus.ACTIVE, monthly_ap=Decimal("10000"))
+    org = _org(
+        db_session,
+        "7700000040",
+        name="Подписчик",
+        status=OrgStatus.ACTIVE,
+        monthly_ap=Decimal("10000"),
+    )
     charge = _charge(db_session, org, today.year, today.month, 10000)
     _pay(db_session, org, charge, 10000, today.replace(day=1))
     resp = client.post("/api/v1/reports/discipline/preview", json={})
@@ -152,8 +174,13 @@ def test_discipline_preview_computes_collectability(client, db_session: Session)
 
 def test_discipline_excludes_non_subscription(client, db_session: Session):
     # без monthly_ap клиент не попадает в отчёт о дисциплине подписчиков
-    _org(db_session, "7700000050", name="Без подписки",
-         status=OrgStatus.ACTIVE, total_debt=Decimal("9000"))
+    _org(
+        db_session,
+        "7700000050",
+        name="Без подписки",
+        status=OrgStatus.ACTIVE,
+        total_debt=Decimal("9000"),
+    )
     resp = client.post("/api/v1/reports/discipline/preview", json={})
     assert resp.status_code == 200
     assert resp.json()["total"] == 0
@@ -163,8 +190,13 @@ def test_discipline_excludes_non_subscription(client, db_session: Session):
 
 
 def test_export_returns_valid_xlsx(client, db_session: Session):
-    _org(db_session, "7700000060", name="Экспорт",
-         monthly_ap=Decimal("10000"), total_debt=Decimal("33000"))
+    _org(
+        db_session,
+        "7700000060",
+        name="Экспорт",
+        monthly_ap=Decimal("10000"),
+        total_debt=Decimal("33000"),
+    )
     resp = client.post("/api/v1/reports/debtors/export", json={})
     assert resp.status_code == 200
     assert "spreadsheetml" in resp.headers["content-type"]
@@ -183,11 +215,14 @@ def test_unknown_report_type_returns_404(client):
 
 
 def test_template_crud(client, db_session: Session):
-    created = client.post("/api/v1/reports/templates", json={
-        "name": "Крупные должники",
-        "report_type": "debtors",
-        "criteria": {"min_debt": 50000, "sort_by": "priority"},
-    })
+    created = client.post(
+        "/api/v1/reports/templates",
+        json={
+            "name": "Крупные должники",
+            "report_type": "debtors",
+            "criteria": {"min_debt": 50000, "sort_by": "priority"},
+        },
+    )
     assert created.status_code == 201
     template_id = created.json()["id"]
 
@@ -202,9 +237,14 @@ def test_template_crud(client, db_session: Session):
 
 
 def test_template_rejects_unknown_type(client):
-    resp = client.post("/api/v1/reports/templates", json={
-        "name": "bad", "report_type": "nope", "criteria": {},
-    })
+    resp = client.post(
+        "/api/v1/reports/templates",
+        json={
+            "name": "bad",
+            "report_type": "nope",
+            "criteria": {},
+        },
+    )
     assert resp.status_code == 404
 
 
@@ -213,8 +253,7 @@ def test_template_rejects_unknown_type(client):
 
 def test_composition_preset_registered(client):
     """Composition зарегистрирован; preview возвращает 200 даже на пустых данных."""
-    resp = client.post("/api/v1/reports/composition/preview",
-                        json={"metric": "mrr_plan"})
+    resp = client.post("/api/v1/reports/composition/preview", json={"metric": "mrr_plan"})
     assert resp.status_code == 200
     body = resp.json()
     assert body["rows"] == []
@@ -222,8 +261,7 @@ def test_composition_preset_registered(client):
 
 
 def test_composition_unknown_metric_returns_400(client):
-    resp = client.post("/api/v1/reports/composition/preview",
-                        json={"metric": "bogus"})
+    resp = client.post("/api/v1/reports/composition/preview", json={"metric": "bogus"})
     assert resp.status_code == 400
 
 
@@ -236,15 +274,19 @@ def test_composition_missing_metric_returns_400(client):
 
 def test_composition_preview_returns_control_value(client, db_session: Session):
     today = date.today()
-    org = _org(db_session, "7700000100", name="Платил",
-               status=OrgStatus.ACTIVE, monthly_ap=Decimal("10000"))
+    org = _org(
+        db_session,
+        "7700000100",
+        name="Платил",
+        status=OrgStatus.ACTIVE,
+        monthly_ap=Decimal("10000"),
+    )
     charge = _charge(db_session, org, today.year, today.month, 10000)
     _pay(db_session, org, charge, 7500, today.replace(day=1))
 
     resp = client.post(
         "/api/v1/reports/composition/preview",
-        json={"metric": "collected_current",
-              "period": f"{today.year}-{today.month:02d}"},
+        json={"metric": "collected_current", "period": f"{today.year}-{today.month:02d}"},
     )
     assert resp.status_code == 200
     body = resp.json()

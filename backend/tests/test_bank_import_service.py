@@ -1,10 +1,9 @@
 from datetime import date
 from decimal import Decimal
 
-import pytest
 from sqlmodel import Session, select
 
-from app.models import Contract, Document, DocType, ImportRun, Organization, OrgStatus
+from app.models import Contract, DocType, Document, Organization, OrgStatus
 from app.parser.bank_statement import (
     BankStatementResult,
     ParsedPayment,
@@ -138,7 +137,8 @@ class TestBankImport:
     def test_strips_payment_info_suffix_in_name(self, db_session: Session):
         # Bank counterparty часто содержит "ООО Х Р/С 40702..." — отсекаем
         payment = _make_payment(
-            date(2026, 1, 15), 5000,
+            date(2026, 1, 15),
+            5000,
             "ООО «КОНТИНЕНТАЛЬ СЕРВИС» Р/С 40702810038170017138 в Сбербанке",
             "7731599248",
         )
@@ -181,7 +181,7 @@ class TestBankImport:
             date=date(2026, 5, 18),
             doc_number="542",
             amount=Decimal("12387.38"),
-            counterparty='ООО Агростройкомплекс',
+            counterparty="ООО Агростройкомплекс",
             inn="5024039775",
             description="Доступ на месяц 2026г. к системе PASS24.online",
             payment_info=PaymentInfo(),
@@ -229,13 +229,11 @@ class TestBankImport:
         result = _make_result(payments)
 
         svc = ImportService(db_session)
-        svc.process_bank_import(
-            result, file_hash="idx-test", period_overrides={1: (2026, 4)}
-        )
+        svc.process_bank_import(result, file_hash="idx-test", period_overrides={1: (2026, 4)})
 
         docs = sorted(db_session.exec(select(Document)).all(), key=lambda d: d.amount)
         assert len(docs) == 2
-        assert docs[0].period_manual is False   # индекс 0 не затронут
-        assert docs[1].period_manual is True    # индекс 1 — оверрайд
+        assert docs[0].period_manual is False  # индекс 0 не затронут
+        assert docs[1].period_manual is True  # индекс 1 — оверрайд
         assert docs[1].period_year == 2026
         assert docs[1].period_month == 4

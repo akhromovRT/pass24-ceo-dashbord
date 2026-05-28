@@ -5,6 +5,7 @@ buyer-уровня меняет статус («Не начато / В рабо�
 добавляет текстовый комментарий. Привязка к Organization, поэтому
 состояние переживает любой новый импорт 1С.
 """
+
 from __future__ import annotations
 
 import uuid
@@ -17,7 +18,10 @@ from sqlmodel import Session, select
 from app.api.v1.auth import get_current_user
 from app.core.database import get_session
 from app.models import (
-    DebtorWorkflow, DebtorWorkflowStatus, Organization, User,
+    DebtorWorkflow,
+    DebtorWorkflowStatus,
+    Organization,
+    User,
 )
 
 router = APIRouter(
@@ -34,7 +38,8 @@ class WorkflowUpdate(BaseModel):
 
 
 def _serialize(
-    wf: DebtorWorkflow, user_name: str | None = None,
+    wf: DebtorWorkflow,
+    user_name: str | None = None,
 ) -> dict:
     return {
         "organization_id": str(wf.organization_id),
@@ -85,9 +90,7 @@ def upsert_workflow(
     return _serialize(wf, user_name=user.name or user.email)
 
 
-def load_workflow_map(
-    session: Session, organization_ids: set[uuid.UUID]
-) -> dict[str, dict]:
+def load_workflow_map(session: Session, organization_ids: set[uuid.UUID]) -> dict[str, dict]:
     """Возвращает {org_id_str: serialized_workflow} для переданных организаций.
 
     Используется в /debt-snapshots, чтобы отдать workflow на каждый buyer
@@ -108,6 +111,5 @@ def load_workflow_map(
         ).all()
         users_map = {u.id: (u.name or u.email) for u in users}
     return {
-        str(w.organization_id): _serialize(w, user_name=users_map.get(w.updated_by_id))
-        for w in wfs
+        str(w.organization_id): _serialize(w, user_name=users_map.get(w.updated_by_id)) for w in wfs
     }

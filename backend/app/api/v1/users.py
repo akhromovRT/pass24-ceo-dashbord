@@ -91,10 +91,12 @@ def create_user(
     session.add(user)
     session.flush()
     write_audit(
-        session, actor=admin, action="user.create",
-        target_type="user", target_id=str(user.id),
-        details={"email": user.email, "role": user.role.value,
-                 "password_generated": generated},
+        session,
+        actor=admin,
+        action="user.create",
+        target_type="user",
+        target_id=str(user.id),
+        details={"email": user.email, "role": user.role.value, "password_generated": generated},
     )
     session.commit()
     session.refresh(user)
@@ -124,8 +126,11 @@ def reset_password(
     user.must_change_password = True
     session.add(user)
     write_audit(
-        session, actor=admin, action="user.reset_password",
-        target_type="user", target_id=str(user.id),
+        session,
+        actor=admin,
+        action="user.reset_password",
+        target_type="user",
+        target_id=str(user.id),
         details={"email": user.email},
     )
     session.commit()

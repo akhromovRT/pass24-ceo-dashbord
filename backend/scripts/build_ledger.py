@@ -2,6 +2,7 @@
 
 Запуск: cd backend && python -m scripts.build_ledger
 """
+
 from sqlmodel import Session, create_engine
 
 from app.core.config import settings

@@ -18,6 +18,7 @@ Usage:
   docker compose exec backend python -m scripts.reassign_transit_payments --dry-run
   docker compose exec backend python -m scripts.reassign_transit_payments --apply
 """
+
 import argparse
 import sys
 from datetime import date
@@ -27,17 +28,21 @@ from sqlmodel import Session, select
 
 from app.core.database import engine
 from app.models import (
-    Contract, DocType, Document, Organization, PaymentAllocation,
+    Contract,
+    DocType,
+    Document,
+    Organization,
+    PaymentAllocation,
 )
 from app.services.allocation_service import AllocationService
 from app.services.charge_service import ChargeService
 
 REASSIGNMENTS = [
-    ("5018126839",   "071513837810", "ПРОМСТРОЙХОЛДИНГ → Гаджикурбанов"),
-    ("771872988874", "7751306500",   "Мораш Олеся → ГАРД-КОМФОРТ"),
-    ("7707083893",   "5048023661",   "Сбербанк/Реутова → Белое озеро"),
-    ("7730036250",   "7710176315",   "Автокомбинат №1 → ФЛЭТ И КО"),
-    ("771819486660", "7751306500",   "Котельников → ГАРД-КОМФОРТ"),
+    ("5018126839", "071513837810", "ПРОМСТРОЙХОЛДИНГ → Гаджикурбанов"),
+    ("771872988874", "7751306500", "Мораш Олеся → ГАРД-КОМФОРТ"),
+    ("7707083893", "5048023661", "Сбербанк/Реутова → Белое озеро"),
+    ("7730036250", "7710176315", "Автокомбинат №1 → ФЛЭТ И КО"),
+    ("771819486660", "7751306500", "Котельников → ГАРД-КОМФОРТ"),
 ]
 
 
@@ -74,12 +79,14 @@ def reassign_one(session, transit_inn, target_inn, label, apply):
     if transit.id == target.id:
         raise SystemExit(f"transit и target совпадают: {transit_inn}")
 
-    docs = list(session.exec(
-        select(Document).where(
-            Document.organization_id == transit.id,
-            Document.doc_type == DocType.PAYMENT,
-        )
-    ).all())
+    docs = list(
+        session.exec(
+            select(Document).where(
+                Document.organization_id == transit.id,
+                Document.doc_type == DocType.PAYMENT,
+            )
+        ).all()
+    )
     total = sum(Decimal(str(d.amount or 0)) for d in docs)
 
     contracts_seen = {}
@@ -92,7 +99,7 @@ def reassign_one(session, transit_inn, target_inn, label, apply):
     summary = {
         "label": label,
         "transit": {"inn": transit.inn, "name": transit.name_display or transit.name_1c},
-        "target":  {"inn": target.inn,  "name": target.name_display or target.name_1c},
+        "target": {"inn": target.inn, "name": target.name_display or target.name_1c},
         "docs_count": len(docs),
         "total_amount": float(total),
         "contracts": sorted({v for v in contracts_seen.values() if v}),
@@ -104,11 +111,13 @@ def reassign_one(session, transit_inn, target_inn, label, apply):
 
     # Удалим аллокации на этих документах (если есть)
     doc_ids = [d.id for d in docs]
-    old_allocs = list(session.exec(
-        select(PaymentAllocation).where(
-            PaymentAllocation.payment_document_id.in_(doc_ids)  # type: ignore[union-attr]
-        )
-    ).all())
+    old_allocs = list(
+        session.exec(
+            select(PaymentAllocation).where(
+                PaymentAllocation.payment_document_id.in_(doc_ids)  # type: ignore[union-attr]
+            )
+        ).all()
+    )
     for a in old_allocs:
         session.delete(a)
     summary["removed_allocs"] = len(old_allocs)
@@ -119,10 +128,16 @@ def reassign_one(session, transit_inn, target_inn, label, apply):
     for d in docs:
         orig_c = session.get(Contract, d.contract_id)
         if orig_c is None:
-            raise SystemExit(f"Document {d.id} ссылается на несуществующий contract {d.contract_id}")
+            raise SystemExit(
+                f"Document {d.id} ссылается на несуществующий contract {d.contract_id}"
+            )
         if orig_c.id not in contract_map:
             target_c = _find_or_create_contract(
-                session, target, orig_c.contract_number, orig_c.contract_type, orig_c.raw_name,
+                session,
+                target,
+                orig_c.contract_number,
+                orig_c.contract_type,
+                orig_c.raw_name,
             )
             contract_map[orig_c.id] = target_c.id
         d.organization_id = target.id
@@ -134,15 +149,20 @@ def reassign_one(session, transit_inn, target_inn, label, apply):
     # Перед rebuild удалим ВСЕ аллокации связанные с charges target — иначе
     # FK constraint на payment_allocations не даст удалить monthly_charges.
     from app.models import MonthlyCharge
-    target_charge_ids = list(session.exec(
-        select(MonthlyCharge.id).where(MonthlyCharge.organization_id == target.id)
-    ).all())
+
+    target_charge_ids = list(
+        session.exec(
+            select(MonthlyCharge.id).where(MonthlyCharge.organization_id == target.id)
+        ).all()
+    )
     if target_charge_ids:
-        target_allocs = list(session.exec(
-            select(PaymentAllocation).where(
-                PaymentAllocation.monthly_charge_id.in_(target_charge_ids)  # type: ignore[union-attr]
-            )
-        ).all())
+        target_allocs = list(
+            session.exec(
+                select(PaymentAllocation).where(
+                    PaymentAllocation.monthly_charge_id.in_(target_charge_ids)  # type: ignore[union-attr]
+                )
+            ).all()
+        )
         for a in target_allocs:
             session.delete(a)
         session.flush()
@@ -151,7 +171,9 @@ def reassign_one(session, transit_inn, target_inn, label, apply):
     start = charge_svc.charge_start(target.id)
     if start is not None:
         charge_svc.rebuild_for_organization(
-            target.id, start=start, through=date.today(),
+            target.id,
+            start=start,
+            through=date.today(),
         )
         AllocationService(session).recompute_for_organization(target.id)
 
@@ -172,8 +194,7 @@ def main():
     with Session(engine) as session:
         for transit_inn, target_inn, label in REASSIGNMENTS:
             try:
-                s = reassign_one(session, transit_inn, target_inn, label,
-                                 apply=args.apply)
+                s = reassign_one(session, transit_inn, target_inn, label, apply=args.apply)
             except Exception as e:
                 print(f"  ✗ {label}: {e}")
                 continue

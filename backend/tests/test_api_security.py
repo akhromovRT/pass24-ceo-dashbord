@@ -4,6 +4,7 @@
 случайно был доступен без токена). Если новый роутер забыл добавить
 get_current_user в dependencies — этот тест провалится.
 """
+
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -15,7 +16,9 @@ PUBLIC_PATHS = {
     "/health",
     "/api/v1/auth/login",
     # /docs, /openapi.json и /redoc — открыты только в DEBUG=true.
-    "/docs", "/openapi.json", "/redoc",
+    "/docs",
+    "/openapi.json",
+    "/redoc",
     "/openapi.yaml",  # не используется, но FastAPI может отдавать
 }
 
@@ -41,8 +44,7 @@ def _all_protected_paths() -> list[tuple[str, str]]:
 def _materialize_path(path: str) -> str:
     """Подставляем минимальные dummy-значения в path-параметры."""
     return (
-        path
-        .replace("{snapshot_id}", "00000000-0000-0000-0000-000000000000")
+        path.replace("{snapshot_id}", "00000000-0000-0000-0000-000000000000")
         .replace("{organization_id}", "00000000-0000-0000-0000-000000000000")
         .replace("{template_id}", "00000000-0000-0000-0000-000000000000")
         .replace("{report_type}", "debtors")
@@ -58,9 +60,7 @@ def test_all_protected_routes_reject_anonymous():
         url = _materialize_path(path)
         resp = client.request(method, url)
         if resp.status_code not in (401, 403):
-            failures.append(
-                f"{method} {url} → {resp.status_code} (ожидали 401/403)"
-            )
+            failures.append(f"{method} {url} → {resp.status_code} (ожидали 401/403)")
     assert not failures, (
         "Незащищённые маршруты (или возвращают не-401/403 без токена):\n  - "
         + "\n  - ".join(failures)

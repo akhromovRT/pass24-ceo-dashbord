@@ -43,18 +43,21 @@ def list_debtors(
         debt = float(o.total_debt or 0)
         monthly = float(o.monthly_ap or 0)
         bucket, age = aging.get(o.id, ("90+", None))
-        out.append({
-            "id": str(o.id), "inn": o.inn,
-            "name": o.name_display or o.name_1c,
-            "monthly_ap": monthly or None,
-            "total_debt": debt,
-            "payment_score": o.payment_score,
-            "status": o.status,
-            "churn_month": o.churn_month.isoformat() if o.churn_month else None,
-            "manager_id": str(o.manager_id) if o.manager_id else None,
-            "months_overdue": age,
-            "aging_bucket": bucket,
-        })
+        out.append(
+            {
+                "id": str(o.id),
+                "inn": o.inn,
+                "name": o.name_display or o.name_1c,
+                "monthly_ap": monthly or None,
+                "total_debt": debt,
+                "payment_score": o.payment_score,
+                "status": o.status,
+                "churn_month": o.churn_month.isoformat() if o.churn_month else None,
+                "manager_id": str(o.manager_id) if o.manager_id else None,
+                "months_overdue": age,
+                "aging_bucket": bucket,
+            }
+        )
     return out
 
 
@@ -62,8 +65,7 @@ def list_debtors(
 def segments(session: Session = Depends(get_session)):
     """Сегментация клиентов реестра по собираемости закрытого месяца."""
     today = date.today()
-    prev_y, prev_m = ((today.year, today.month - 1) if today.month > 1
-                      else (today.year - 1, 12))
+    prev_y, prev_m = (today.year, today.month - 1) if today.month > 1 else (today.year - 1, 12)
 
     orgs = session.exec(
         select(Organization).where(
@@ -104,8 +106,7 @@ def segments(session: Session = Depends(get_session)):
             objs_by_org.setdefault(co.organization_id, 0)
             objs_by_org[co.organization_id] += 1
     objects_total = sum(
-        objs_by_org[o.id] if o.id in objs_by_org else (o.objects_count_declared or 1)
-        for o in orgs
+        objs_by_org[o.id] if o.id in objs_by_org else (o.objects_count_declared or 1) for o in orgs
     )
 
     paying = partial = not_paying = debtors = 0
@@ -127,18 +128,19 @@ def segments(session: Session = Depends(get_session)):
     # потому что Транзит с in_registry=False и так не попадает.
     # CHURNED оставляем в выборке (in_registry=True), но выделяем
     # отдельной плиткой «К списанию».
-    debt_active = sum(
-        float(o.total_debt or 0) for o in orgs if o.status in _ACTIVE_DEBT_STATUSES
-    )
+    debt_active = sum(float(o.total_debt or 0) for o in orgs if o.status in _ACTIVE_DEBT_STATUSES)
     debt_writeoff = sum(
         float(o.total_debt or 0) for o in orgs if o.status in _WRITEOFF_DEBT_STATUSES
     )
     debt_all = sum(float(o.total_debt or 0) for o in orgs)
 
     return {
-        "total": total, "mrr_plan": round(mrr_plan, 2),
-        "paying": paying, "partial": partial,
-        "not_paying": not_paying, "debtors": debtors,
+        "total": total,
+        "mrr_plan": round(mrr_plan, 2),
+        "paying": paying,
+        "partial": partial,
+        "not_paying": not_paying,
+        "debtors": debtors,
         "objects_total": objects_total,
         "total_debt_active": round(debt_active, 2),
         "total_debt_writeoff": round(debt_writeoff, 2),

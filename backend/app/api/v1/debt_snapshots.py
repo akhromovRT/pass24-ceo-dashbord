@@ -5,6 +5,7 @@
 - GET /debt-snapshots/latest   — последний снимок + строки + сверка с БД
 - GET /debt-snapshots/{id}     — конкретный снимок + строки + сверка с БД
 """
+
 from __future__ import annotations
 
 import uuid
@@ -17,7 +18,11 @@ from app.api.v1.auth import get_current_user
 from app.api.v1.debtor_workflow import load_workflow_map
 from app.core.database import get_session
 from app.models import (
-    DebtSnapshot, DebtSnapshotLevel, DebtSnapshotRow, Organization, OrgStatus,
+    DebtSnapshot,
+    DebtSnapshotLevel,
+    DebtSnapshotRow,
+    Organization,
+    OrgStatus,
 )
 
 # Какие статусы клиентов считаются «нашими постоянными» при фильтре
@@ -42,6 +47,7 @@ def _parse_org_statuses(raw: str | None) -> set[OrgStatus] | None:
         return None
     parsed = {OrgStatus(t) for t in tokens if t in _VALID_STATUS_TOKENS}
     return parsed or None
+
 
 router = APIRouter(
     prefix="/debt-snapshots",
@@ -181,16 +187,18 @@ def _build_full_response(
         db_debt = info["actual_total_debt"] or 0
         delta = file_debt - db_debt
         if abs(delta) > 1.0 and not info["excluded_from_analytics"]:
-            diffs.append({
-                "row_id": str(r.id),
-                "organization_id": str(r.organization_id),
-                "inn": r.raw_inn,
-                "name": info["name_display"] or info["name_1c"] or r.raw_name,
-                "file_debt_end": file_debt,
-                "db_total_debt": db_debt,
-                "delta": delta,
-                "status": info["status"],
-            })
+            diffs.append(
+                {
+                    "row_id": str(r.id),
+                    "organization_id": str(r.organization_id),
+                    "inn": r.raw_inn,
+                    "name": info["name_display"] or info["name_1c"] or r.raw_name,
+                    "file_debt_end": file_debt,
+                    "db_total_debt": db_debt,
+                    "delta": delta,
+                    "status": info["status"],
+                }
+            )
 
     return {
         "snapshot": _serialize_snapshot_meta(snap),
@@ -200,8 +208,7 @@ def _build_full_response(
         "diffs": diffs,
         "only_regular": only_regular,
         "org_statuses": (
-            sorted(s.value for s in effective_statuses)
-            if effective_statuses is not None else None
+            sorted(s.value for s in effective_statuses) if effective_statuses is not None else None
         ),
     }
 
@@ -221,7 +228,7 @@ def get_latest_snapshot(
     org_statuses: str | None = Query(
         default=None,
         description="CSV статусов (active,suspended,churned,transit,prospect). "
-                    "Если задан — приоритетнее only_regular.",
+        "Если задан — приоритетнее only_regular.",
     ),
     session: Session = Depends(get_session),
 ):
@@ -231,7 +238,8 @@ def get_latest_snapshot(
     if not snap:
         raise HTTPException(status_code=404, detail="No debt snapshots yet")
     return _build_full_response(
-        session, snap,
+        session,
+        snap,
         only_regular=only_regular,
         org_statuses=_parse_org_statuses(org_statuses),
     )
@@ -244,17 +252,16 @@ def get_snapshot(
     org_statuses: str | None = Query(
         default=None,
         description="CSV статусов (active,suspended,churned,transit,prospect). "
-                    "Если задан — приоритетнее only_regular.",
+        "Если задан — приоритетнее only_regular.",
     ),
     session: Session = Depends(get_session),
 ):
-    snap = session.exec(
-        select(DebtSnapshot).where(DebtSnapshot.id == snapshot_id)
-    ).first()
+    snap = session.exec(select(DebtSnapshot).where(DebtSnapshot.id == snapshot_id)).first()
     if not snap:
         raise HTTPException(status_code=404, detail="Snapshot not found")
     return _build_full_response(
-        session, snap,
+        session,
+        snap,
         only_regular=only_regular,
         org_statuses=_parse_org_statuses(org_statuses),
     )

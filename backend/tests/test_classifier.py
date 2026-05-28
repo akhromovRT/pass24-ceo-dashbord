@@ -1,4 +1,4 @@
-from app.parser.classifier import classify_contract, ContractType
+from app.parser.classifier import ContractType, classify_contract
 
 
 class TestClassifier:
