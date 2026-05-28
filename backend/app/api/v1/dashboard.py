@@ -397,7 +397,16 @@ def aging_bucket_detail(bucket: str, session: Session = Depends(get_session)):
 
 
 @router.get("/mrr-trend")
-def mrr_trend(session: Session = Depends(get_session)):
+def mrr_trend(
+    forecast_months: int = 12,
+    session: Session = Depends(get_session),
+):
+    """История MRR (sold/paid) + опциональный прогноз на N месяцев вперёд.
+
+    Прогноз (P3.2): простая линейная регрессия по последним до 6 месяцам
+    paid_ap. Этого достаточно для тренд-линии «куда идём», а не
+    точечного прогноза. forecast_months=0 — прогноз не возвращать.
+    """
     results = session.exec(
         select(
             MonthlySnapshot.year, MonthlySnapshot.month,
@@ -409,10 +418,53 @@ def mrr_trend(session: Session = Depends(get_session)):
         .group_by(MonthlySnapshot.year, MonthlySnapshot.month)
         .order_by(MonthlySnapshot.year, MonthlySnapshot.month)
     ).all()
-    return [
+    history = [
         {"year": r[0], "month": r[1], "sold_ap": _f(r[2]), "paid_ap": _f(r[3])}
         for r in results
     ]
+    if forecast_months <= 0 or len(history) < 3:
+        return history
+
+    forecast = _forecast_mrr(history, forecast_months)
+    return history + forecast
+
+
+def _forecast_mrr(history: list[dict], months: int) -> list[dict]:
+    """Линейная регрессия paid_ap по индексу месяца. Берём не больше 6
+    последних точек (старее перестаёт отражать текущий тренд)."""
+    pts = [(i, float(h["paid_ap"] or 0))
+           for i, h in enumerate(history)
+           if h.get("paid_ap") is not None]
+    if len(pts) < 3:
+        return []
+    pts = pts[-6:]
+    n = len(pts)
+    sx = sum(p[0] for p in pts)
+    sy = sum(p[1] for p in pts)
+    sxx = sum(p[0] ** 2 for p in pts)
+    sxy = sum(p[0] * p[1] for p in pts)
+    denom = n * sxx - sx * sx
+    if denom == 0:
+        return []
+    slope = (n * sxy - sx * sy) / denom
+    intercept = (sy - slope * sx) / n
+
+    last = history[-1]
+    y, m = int(last["year"]), int(last["month"])
+    out: list[dict] = []
+    base_idx = len(history) - 1
+    for k in range(1, months + 1):
+        m += 1
+        if m > 12:
+            m = 1; y += 1
+        forecast_value = max(0.0, round(intercept + slope * (base_idx + k), 2))
+        out.append({
+            "year": y, "month": m,
+            "sold_ap": None,
+            "paid_ap": None,
+            "forecast_paid_ap": forecast_value,
+        })
+    return out
 
 
 @router.get("/payment-matrix")
