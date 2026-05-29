@@ -36,6 +36,7 @@ const statusOptions = [
   { label: 'Отток', value: 'churned' },
   { label: 'Транзит', value: 'transit' },
   { label: 'Потенциальный', value: 'prospect' },
+  { label: 'Поставщик', value: 'supplier' },
 ]
 
 function statusSeverity(status: string): 'success' | 'secondary' | 'warn' | 'danger' | 'info' {

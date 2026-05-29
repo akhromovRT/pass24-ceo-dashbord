@@ -74,6 +74,7 @@ const statusOptions = [
   { label: 'Отток', value: 'churned' },
   { label: 'Транзит', value: 'transit' },
   { label: 'Потенциальный', value: 'prospect' },
+  { label: 'Поставщик', value: 'supplier' },
 ]
 const orgTypeOptions = [
   { label: 'ТСН', value: 'TSN' },

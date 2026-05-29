@@ -9,13 +9,16 @@ import Select from 'primevue/select'
 import SelectButton from 'primevue/selectbutton'
 import InputText from 'primevue/inputtext'
 import Textarea from 'primevue/textarea'
+import Button from 'primevue/button'
 import { useToast } from 'primevue/usetoast'
+import { useConfirm } from 'primevue/useconfirm'
 import api from '../api/client'
 import SegmentBand from '../components/SegmentBand.vue'
 
 const router = useRouter()
 const route = useRoute()
 const toast = useToast()
+const confirm = useConfirm()
 
 const mode = ref<'registry' | 'source'>(
   route.query.mode === 'source' ? 'source' : 'registry'
@@ -42,6 +45,7 @@ const statusOptions = [
   { label: 'Отток', value: 'churned' },
   { label: 'Транзит', value: 'transit' },
   { label: 'Потенциальный', value: 'prospect' },
+  { label: 'Поставщик', value: 'supplier' },
 ]
 
 onMounted(async () => {
@@ -56,19 +60,34 @@ onMounted(async () => {
 
 const BUCKETS = ['0-30', '31-60', '61-90', '90+']
 
-const filteredRows = computed(() =>
-  bucket.value === 'all'
-    ? debtors.value
-    : debtors.value.filter(r => r.aging_bucket === bucket.value),
-)
+// P3.0.7 (Софья 2026-05-29): поиск в Реестре должников по name/inn.
+const registrySearch = ref('')
+
+const filteredRows = computed(() => {
+  let rows = debtors.value
+  if (bucket.value !== 'all') {
+    rows = rows.filter(r => r.aging_bucket === bucket.value)
+  }
+  const q = registrySearch.value.trim().toLowerCase()
+  if (q) {
+    rows = rows.filter(r =>
+      (r.name || '').toLowerCase().includes(q) ||
+      (r.inn || '').includes(q),
+    )
+  }
+  return rows
+})
 
 // Разделение долга по статусам клиента (P3.0.3, вариант Б):
 // «к взысканию» — ACTIVE+SUSPENDED, «к списанию» — CHURNED+TRANSIT.
 const ACTIVE_DEBT_STATUSES = ['active', 'suspended']
 const WRITEOFF_DEBT_STATUSES = ['churned', 'transit']
 
+// P3.0.9 (Софья 2026-05-29): шапка считает по filteredRows, чтобы цифры
+// «метчились с фильтром» (если выбрана корзина 0–30, метрика «Долг активных»
+// показывает долг только видимых строк, а не всех должников).
 const metrics = computed(() => {
-  const rows = debtors.value
+  const rows = filteredRows.value
   const debtActive = rows
     .filter(r => ACTIVE_DEBT_STATUSES.includes(r.status))
     .reduce((s, r) => s + (r.total_debt || 0), 0)
@@ -146,6 +165,44 @@ function openClient(inn: string) {
   router.push(`/clients/${inn}`)
 }
 
+// P3.0.8b (Софья 2026-05-29): «Списать долг» — невозвратный долг.
+// Атомарно обнуляет total_debt, ставит CHURNED + churn_month=today.
+function confirmWriteOff(row: any) {
+  const sum = fmtRub(row.total_debt)
+  confirm.require({
+    header: 'Списать долг как невозвратный?',
+    message: `Долг ${sum} клиента «${row.name}» (ИНН ${row.inn}) будет обнулён, клиент переведён в «Отток» с месяцем отключения = сегодня. Действие необратимо — но останется в audit log.`,
+    icon: 'pi pi-exclamation-triangle',
+    acceptLabel: 'Списать',
+    rejectLabel: 'Отмена',
+    acceptClass: 'p-button-danger',
+    accept: () => writeOffDebt(row),
+  })
+}
+
+async function writeOffDebt(row: any) {
+  try {
+    const res = await api.post(`/organizations/${row.inn}/write-off`)
+    // Локально обновляем строку — чтобы UI среагировал без полной перезагрузки
+    row.total_debt = res.data.new_total_debt
+    row.status = res.data.status
+    row.churn_month = res.data.churn_month
+    toast.add({
+      severity: 'success',
+      summary: 'Долг списан',
+      detail: `${row.name}: ${fmtRub(res.data.previous_total_debt)} → 0 ₽`,
+      life: 4000,
+    })
+  } catch (e: any) {
+    toast.add({
+      severity: 'error',
+      summary: 'Не удалось списать долг',
+      detail: e?.response?.data?.detail || 'Ошибка сервера',
+      life: 5000,
+    })
+  }
+}
+
 // --- 1С-вид ---
 const snapshots = ref<any[]>([])
 const sourceLoading = ref(false)
@@ -163,6 +220,17 @@ const statusPresets = [
   { label: 'Наши (вкл. Отток)', value: 'active,suspended,churned' },
 ]
 const orgStatusesPreset = ref<string>('active')  // по умолчанию — только активные
+
+// Пресеты фильтра «по статусу проработки» (P3.0.6 от 2026-05-29).
+// Каждый пресет = csv для API ?workflow_statuses=...; пустая строка = все.
+const workflowPresets = [
+  { label: 'Все', value: '' },
+  { label: 'Не разобранные', value: 'not_started,in_progress' },
+  { label: 'Только Не начато', value: 'not_started' },
+  { label: 'Только В работе', value: 'in_progress' },
+  { label: 'Только Проработано', value: 'done' },
+]
+const workflowPreset = ref<string>('')  // по умолчанию — все
 
 const workflowStatusOptions = [
   { label: 'Не начато', value: 'not_started' },
@@ -185,6 +253,7 @@ async function loadSource(snapshotId: string | null = null) {
     const res = await api.get(url, {
       params: {
         org_statuses: orgStatusesPreset.value || undefined,
+        workflow_statuses: workflowPreset.value || undefined,
       },
     })
     sourceData.value = res.data
@@ -210,10 +279,10 @@ watch(selectedSnapshotId, (v, prev) => {
   if (v && v !== prev && v !== sourceData.value?.snapshot?.id) loadSource(v)
 })
 
-// При смене пресета статусов перезагружаем с бэка — фильтрация
-// серверная (каскад по дереву и подсчёт «расхождений» считаются от
-// уже отфильтрованного множества).
-watch(orgStatusesPreset, () => {
+// При смене пресета статусов или workflow-фильтра перезагружаем с бэка —
+// фильтрация серверная (каскад по дереву и подсчёт «расхождений»
+// считаются от уже отфильтрованного множества).
+watch([orgStatusesPreset, workflowPreset], () => {
   if (mode.value === 'source') loadSource(selectedSnapshotId.value)
 })
 
@@ -395,6 +464,17 @@ const sourceSnapshotLabel = (s: any) =>
     <template v-if="mode === 'registry'">
       <SegmentBand :metrics="metrics" :segments="segments" v-model="bucket" />
 
+      <div class="registry-toolbar">
+        <InputText
+          v-model="registrySearch"
+          placeholder="Поиск по имени или ИНН..."
+          class="registry-search"
+        />
+        <span v-if="registrySearch" class="registry-search-hint">
+          найдено: {{ filteredRows.length }} из {{ debtors.length }}
+        </span>
+      </div>
+
       <DataTable
         :value="filteredRows"
         :loading="loading"
@@ -452,6 +532,20 @@ const sourceSnapshotLabel = (s: any) =>
         <Column field="payment_score" header="Оценка" style="width: 90px">
           <template #body="{ data }">{{ data.payment_score ?? '—' }}</template>
         </Column>
+        <Column header="Действия" style="width: 130px">
+          <template #body="{ data }">
+            <Button
+              v-if="data.total_debt > 0"
+              icon="pi pi-times-circle"
+              label="Списать"
+              severity="danger"
+              size="small"
+              text
+              @click.stop="confirmWriteOff(data)"
+              :title="`Списать долг ${fmtRub(data.total_debt)} как невозвратный`"
+            />
+          </template>
+        </Column>
       </DataTable>
     </template>
 
@@ -501,6 +595,18 @@ const sourceSnapshotLabel = (s: any) =>
             optionValue="value"
             :allow-empty="false"
             size="small"
+          />
+        </div>
+        <div class="source-status-filter"
+             title="Фильтр по статусу проработки клиента. «Не разобранные» скрывает Проработанных.">
+          <span class="source-status-label">Проработка:</span>
+          <Select
+            v-model="workflowPreset"
+            :options="workflowPresets"
+            optionLabel="label"
+            optionValue="value"
+            size="small"
+            class="source-workflow-select"
           />
         </div>
       </div>
@@ -641,6 +747,19 @@ const sourceSnapshotLabel = (s: any) =>
 }
 .churn-cell { color: #b45309; font-size: 0.85rem; }
 .muted { color: #cbd5e1; }
+.registry-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0.25rem 0 0.5rem;
+}
+.registry-search {
+  width: 320px;
+}
+.registry-search-hint {
+  color: #64748b;
+  font-size: 0.85rem;
+}
 
 /* --- 1С-вид --- */
 .source-toolbar {
@@ -691,6 +810,9 @@ const sourceSnapshotLabel = (s: any) =>
 .source-status-label {
   color: #475569;
   font-size: 0.9rem;
+}
+.source-workflow-select {
+  min-width: 180px;
 }
 .snap-opt {
   display: flex;

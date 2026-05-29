@@ -5,6 +5,7 @@
 
 from datetime import date
 
+from sqlalchemy import and_
 from sqlmodel import Session, func, select
 
 from app.models import (
@@ -18,8 +19,17 @@ from app.models import (
 
 
 def excl():
-    """Предикат: организация не исключена из аналитики."""
-    return Organization.excluded_from_analytics == False  # noqa: E712
+    """Предикат: организация не исключена из аналитики.
+
+    Включает два условия:
+      - `excluded_from_analytics=False` — старый флаг (тестовые/дублёры);
+      - `status != SUPPLIER` — поставщики (P3.0.8a, возвраты на расчётный
+        счёт). Софья 2026-05-29: «полностью исключаем из CEO-дашборда».
+    """
+    return and_(
+        Organization.excluded_from_analytics == False,  # noqa: E712
+        Organization.status != OrgStatus.SUPPLIER,
+    )
 
 
 def to_float(x) -> float:

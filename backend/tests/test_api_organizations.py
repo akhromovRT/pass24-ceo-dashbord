@@ -162,3 +162,69 @@ class TestOrganizationsAPI:
     def test_get_documents_not_found(self, client: TestClient):
         resp = client.get("/api/v1/organizations/0000000000/documents")
         assert resp.status_code == 404
+
+
+class TestWriteOffDebt:
+    """P3.0.8b (Софья 2026-05-29): действие «Списать долг»."""
+
+    @pytest.fixture
+    def auth_client(self, db_session: Session):
+        # Сохраняем пользователя в БД, чтобы audit_log.actor_user_id (FK)
+        # был валидным — write_off пишет audit-запись.
+        admin = User(
+            name="Admin",
+            email="admin@local",
+            hashed_password="x",
+            role=UserRole.ADMIN,
+            is_active=True,
+        )
+        db_session.add(admin)
+        db_session.commit()
+        db_session.refresh(admin)
+
+        def override_get_session():
+            yield db_session
+
+        def override_get_current_user():
+            return admin
+
+        app.dependency_overrides[get_session] = override_get_session
+        app.dependency_overrides[get_current_user] = override_get_current_user
+        yield TestClient(app)
+        app.dependency_overrides.clear()
+
+    def test_write_off_zeroes_debt_and_sets_churned(
+        self, auth_client: TestClient, sample_org: Organization, db_session: Session
+    ):
+        r = auth_client.post(f"/api/v1/organizations/{sample_org.inn}/write-off")
+        assert r.status_code == 200, r.text
+        d = r.json()
+        assert d["previous_total_debt"] == 20790.00
+        assert d["new_total_debt"] == 0.0
+        assert d["status"] == "churned"
+        assert d["churn_month"] is not None
+
+        db_session.expire_all()
+        org = db_session.query(Organization).filter(Organization.inn == sample_org.inn).one()
+        assert org.status == OrgStatus.CHURNED
+        assert float(org.total_debt) == 0.0
+        assert org.churn_month is not None and org.churn_month.day == 1
+
+    def test_write_off_writes_audit(
+        self, auth_client: TestClient, sample_org: Organization, db_session: Session
+    ):
+        from app.models import AuditLog
+
+        auth_client.post(f"/api/v1/organizations/{sample_org.inn}/write-off")
+        logs = (
+            db_session.query(AuditLog)
+            .filter(AuditLog.action == "organization.write_off_debt")
+            .all()
+        )
+        assert len(logs) == 1
+        assert logs[0].target_id == str(sample_org.id)
+        assert sample_org.inn in (logs[0].details or "")
+
+    def test_write_off_404_unknown(self, auth_client: TestClient):
+        r = auth_client.post("/api/v1/organizations/0000000000/write-off")
+        assert r.status_code == 404

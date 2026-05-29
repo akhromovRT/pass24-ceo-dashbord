@@ -116,6 +116,7 @@ const statusOptions = [
   { label: 'Отток', value: 'churned' },
   { label: 'Транзит', value: 'transit' },
   { label: 'Потенциальный', value: 'prospect' },
+  { label: 'Поставщик', value: 'supplier' },
 ]
 const bucketOptions = ['0-30', '31-60', '61-90', '90+']
 const contractTypeOptions = [

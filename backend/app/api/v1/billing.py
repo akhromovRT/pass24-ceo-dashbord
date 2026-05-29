@@ -31,6 +31,7 @@ def list_debtors(
         select(Organization)
         .where(
             Organization.excluded_from_analytics == False,  # noqa: E712
+            Organization.status != OrgStatus.SUPPLIER,
             Organization.total_debt.is_not(None),  # type: ignore[union-attr]
             Organization.total_debt > min_debt,  # type: ignore[operator]
         )
@@ -70,6 +71,7 @@ def segments(session: Session = Depends(get_session)):
     orgs = session.exec(
         select(Organization).where(
             Organization.excluded_from_analytics == False,  # noqa: E712
+            Organization.status != OrgStatus.SUPPLIER,
             Organization.in_registry == True,  # noqa: E712
         )
     ).all()

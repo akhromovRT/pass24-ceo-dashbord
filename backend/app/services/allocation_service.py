@@ -161,6 +161,29 @@ class AllocationService:
                     )
                 )
         self.session.flush()
+        # P3.0.5.1 — обновить денормализованный Organization.total_debt из
+        # пересчитанного AR-леджера, чтобы UI «Реестр должников» и дашборд
+        # показывали актуальный долг сразу после новой оплаты, а не ждали
+        # очередного импорта debt-report'а от 1С.
+        self._sync_total_debt(org_id, outstanding)
+
+    def _sync_total_debt(self, org_id, outstanding: dict) -> None:
+        """Записывает Organization.total_debt = сумма непогашенных charges.
+        outstanding[c.id] = (charge, left). left — остаток к погашению."""
+        from app.models import Organization
+
+        org = self.session.get(Organization, org_id)
+        if org is None:
+            return
+        unpaid = sum(
+            (left for _c, left in outstanding.values() if left > 0),
+            Decimal("0"),
+        )
+        # Округление до копеек (соответствует max_digits/decimal_places модели).
+        unpaid = unpaid.quantize(Decimal("0.01"))
+        if org.total_debt != unpaid:
+            org.total_debt = unpaid
+            self.session.add(org)
 
     def _fifo(
         self, payment, remaining: Decimal, outstanding: dict, charges: list[MonthlyCharge]

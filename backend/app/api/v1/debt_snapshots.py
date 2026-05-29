@@ -115,6 +115,7 @@ def _build_full_response(
     snap: DebtSnapshot,
     only_regular: bool = False,
     org_statuses: set[OrgStatus] | None = None,
+    workflow_statuses: set[str] | None = None,
 ) -> dict:
     rows = session.exec(
         select(DebtSnapshotRow)
@@ -176,6 +177,29 @@ def _build_full_response(
                 allowed_row_ids.add(r.id)
         rows = [r for r in rows if r.id in allowed_row_ids]
 
+    # Фильтр по статусу проработки (P3.0.6, Софья 2026-05-29): «отсеивать
+    # тех, кто проработан». Логика та же что и для статусов клиента:
+    # отбираем buyer-rows с workflow.status в множестве, каскадно
+    # включаем их детей (contract → document). Если buyer не имеет
+    # записи в workflow_by_org — считаем что у него status='not_started'
+    # (значение по умолчанию модели DebtorWorkflow).
+    if workflow_statuses is not None:
+        allowed_buyer_ids = set()
+        for r in rows:
+            if r.level != DebtSnapshotLevel.BUYER or not r.organization_id:
+                continue
+            wf = workflow_map.get(str(r.organization_id))
+            current = wf["status"] if wf else "not_started"
+            if current in workflow_statuses:
+                allowed_buyer_ids.add(r.id)
+        allowed_row_ids = set(allowed_buyer_ids)
+        for r in rows:
+            if r.id in allowed_row_ids:
+                continue
+            if r.parent_row_id and r.parent_row_id in allowed_row_ids:
+                allowed_row_ids.add(r.id)
+        rows = [r for r in rows if r.id in allowed_row_ids]
+
     diffs = []
     for r in rows:
         if r.level != DebtSnapshotLevel.BUYER or not r.organization_id:
@@ -210,7 +234,18 @@ def _build_full_response(
         "org_statuses": (
             sorted(s.value for s in effective_statuses) if effective_statuses is not None else None
         ),
+        "workflow_statuses": sorted(workflow_statuses) if workflow_statuses else None,
     }
+
+
+def _parse_workflow_statuses(raw: str | None) -> set[str] | None:
+    """csv 'not_started,in_progress' → set. Невалидные токены отбрасываются."""
+    if not raw:
+        return None
+    valid = {"not_started", "in_progress", "done"}
+    tokens = {t.strip().lower() for t in raw.split(",") if t.strip()}
+    parsed = tokens & valid
+    return parsed or None
 
 
 @router.get("")
@@ -230,6 +265,11 @@ def get_latest_snapshot(
         description="CSV статусов (active,suspended,churned,transit,prospect). "
         "Если задан — приоритетнее only_regular.",
     ),
+    workflow_statuses: str | None = Query(
+        default=None,
+        description="CSV workflow-статусов (not_started,in_progress,done). "
+        "Скрыть проработанных: workflow_statuses=not_started,in_progress",
+    ),
     session: Session = Depends(get_session),
 ):
     snap = session.exec(
@@ -242,6 +282,7 @@ def get_latest_snapshot(
         snap,
         only_regular=only_regular,
         org_statuses=_parse_org_statuses(org_statuses),
+        workflow_statuses=_parse_workflow_statuses(workflow_statuses),
     )
 
 
@@ -254,6 +295,10 @@ def get_snapshot(
         description="CSV статусов (active,suspended,churned,transit,prospect). "
         "Если задан — приоритетнее only_regular.",
     ),
+    workflow_statuses: str | None = Query(
+        default=None,
+        description="CSV workflow-статусов (not_started,in_progress,done).",
+    ),
     session: Session = Depends(get_session),
 ):
     snap = session.exec(select(DebtSnapshot).where(DebtSnapshot.id == snapshot_id)).first()
@@ -264,4 +309,5 @@ def get_snapshot(
         snap,
         only_regular=only_regular,
         org_statuses=_parse_org_statuses(org_statuses),
+        workflow_statuses=_parse_workflow_statuses(workflow_statuses),
     )

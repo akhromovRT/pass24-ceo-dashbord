@@ -28,6 +28,10 @@ class OrgStatus(str, enum.Enum):
     # после переоформления ИНН). После даты последнего платежа начисления
     # прекращаются, в active_clients и churn-rate не учитывается.
     TRANSIT = "transit"
+    # Поставщик: возвраты, попавшие к нам на расчётный счёт. Не участвует
+    # в расчёте АП и нигде в статистике (как excluded_from_analytics=True,
+    # только именованный статус для удобства). Софья 2026-05-29.
+    SUPPLIER = "supplier"
 
 
 class Organization(SQLModel, table=True):

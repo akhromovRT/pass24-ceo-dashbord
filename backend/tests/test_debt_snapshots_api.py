@@ -277,3 +277,58 @@ class TestOnlyRegularFilter:
             assert levels == ["buyer", "contract", "document"]
         finally:
             app.dependency_overrides.clear()
+
+
+class TestWorkflowStatusFilter:
+    def test_filter_excludes_done_buyers(self, db_session: Session):
+        """P3.0.6: workflow_statuses=not_started,in_progress скрывает done."""
+        _seed(db_session)
+        _mark_in_registry(db_session, "7700000001")
+        org = db_session.query(Organization).filter(Organization.inn == "7700000001").one()
+        # Помечаем единственного buyer'а как done
+        db_session.add(
+            DebtorWorkflow(
+                organization_id=org.id,
+                status=DebtorWorkflowStatus.DONE,
+                comment="оплачено",
+            )
+        )
+        db_session.commit()
+
+        client = _client_with_session(db_session)
+        try:
+            # Без фильтра — все 3 строки (buyer + contract + document)
+            r = client.get("/api/v1/debt-snapshots/latest")
+            assert len(r.json()["rows"]) == 3
+
+            # workflow_statuses=not_started,in_progress — done скрывается
+            r = client.get(
+                "/api/v1/debt-snapshots/latest",
+                params={"workflow_statuses": "not_started,in_progress"},
+            )
+            d = r.json()
+            assert d["rows"] == []
+            assert d["workflow_statuses"] == ["in_progress", "not_started"]
+
+            # workflow_statuses=done — только этот buyer остаётся
+            r = client.get(
+                "/api/v1/debt-snapshots/latest",
+                params={"workflow_statuses": "done"},
+            )
+            d = r.json()
+            assert len(d["rows"]) == 3
+
+            # buyer без workflow-записи трактуется как not_started
+            db_session.delete(
+                db_session.query(DebtorWorkflow)
+                .filter(DebtorWorkflow.organization_id == org.id)
+                .one()
+            )
+            db_session.commit()
+            r = client.get(
+                "/api/v1/debt-snapshots/latest",
+                params={"workflow_statuses": "not_started"},
+            )
+            assert len(r.json()["rows"]) == 3
+        finally:
+            app.dependency_overrides.clear()

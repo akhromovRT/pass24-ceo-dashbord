@@ -400,3 +400,67 @@ def add_organization_tariff(
     AllocationService(session).recompute_for_organization(org.id)
     session.commit()
     return {"status": "ok", "id": str(tp.id)}
+
+
+class WriteOffResponse(BaseModel):
+    inn: str
+    name: str
+    previous_total_debt: float
+    new_total_debt: float
+    status: str
+    churn_month: str | None
+
+
+@router.post("/{inn}/write-off", response_model=WriteOffResponse)
+def write_off_debt(
+    inn: str,
+    session: Session = Depends(get_session),
+    current_user=Depends(get_current_user),
+):
+    """P3.0.8b (Софья 2026-05-29): «списать долг» как невозвратный.
+
+    Действие — НЕ статус. Атомарно:
+      • total_debt = 0 (исчезает из дебиторки и из общей задолженности),
+      • status = CHURNED (контрагент больше не платит),
+      • churn_month = today (последний месяц начисления АП = сегодня).
+
+    Также пишем запись в audit_log (кто и какая была сумма) — чтобы
+    при необходимости можно было увидеть историю списаний.
+    """
+    from app.services.audit_service import write_audit
+
+    org = session.exec(select(Organization).where(Organization.inn == inn)).first()
+    if org is None:
+        raise HTTPException(status_code=404, detail="Organization not found")
+
+    prev_debt = float(org.total_debt or 0)
+    today = date.today()
+    org.status = OrgStatus.CHURNED
+    org.churn_month = today.replace(day=1)
+    org.total_debt = Decimal("0")
+    org.updated_at = datetime.now(UTC)
+    session.add(org)
+
+    write_audit(
+        session,
+        actor=current_user,
+        action="organization.write_off_debt",
+        target_type="organization",
+        target_id=str(org.id),
+        details={
+            "inn": org.inn,
+            "name": org.name_display or org.name_1c,
+            "previous_total_debt": prev_debt,
+            "churn_month": org.churn_month.isoformat(),
+        },
+    )
+    session.commit()
+    session.refresh(org)
+    return WriteOffResponse(
+        inn=org.inn,
+        name=org.name_display or org.name_1c,
+        previous_total_debt=prev_debt,
+        new_total_debt=0.0,
+        status=org.status.value,
+        churn_month=org.churn_month.isoformat() if org.churn_month else None,
+    )
