@@ -16,7 +16,7 @@
 docker-compose up -d
 ```
 
-Backend: http://localhost:8000/docs
+Backend: http://localhost:8000 (Swagger UI `/docs` — только если `DEBUG=true` в `backend/.env`, см. ADR-021)
 Frontend: http://localhost:3000
 
 ## Структура

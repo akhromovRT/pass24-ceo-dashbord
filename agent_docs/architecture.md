@@ -105,16 +105,18 @@ backend/
 │   │   ├── user.py         # User + UserRole
 │   │   ├── alert.py        # Alert + AlertType + AlertSeverity
 │   │   ├── debt_snapshot.py # DebtSnapshot + DebtSnapshotRow + DebtSnapshotLevel
-│   │   └── debtor_workflow.py # DebtorWorkflow + DebtorWorkflowStatus (per-org проработка)
+│   │   ├── debtor_workflow.py # DebtorWorkflow + DebtorWorkflowStatus (per-org проработка)
+│   │   └── audit_log.py    # AuditLog — действия admin'ов (create user, reset password, write-off)
 │   ├── api/v1/
-│   │   ├── auth.py         # POST /auth/login
-│   │   ├── organizations.py # GET /organizations, /{inn}, /snapshots, /contracts
+│   │   ├── auth.py         # POST /auth/login (in-memory rate-limit 10/мин), /me, /change-password
+│   │   ├── organizations.py # GET /organizations, /{inn}, /snapshots, /contracts, POST /{inn}/write-off
 │   │   ├── contracts.py    # GET /contracts (join + search + sort)
-│   │   ├── dashboard.py    # GET /dashboard/summary, /mrr-trend, /aging
-│   │   ├── billing.py      # GET /billing/debtors, /segments (включая objects_total)
+│   │   ├── dashboard.py    # GET /dashboard/summary, /mrr-trend (?forecast_months=N), /aging
+│   │   ├── billing.py      # GET /billing/debtors, /segments (objects_total + total_debt_active/writeoff)
 │   │   ├── imports.py      # POST /import/upload, GET /import/runs
-│   │   ├── debt_snapshots.py # GET /debt-snapshots, /latest, /{id} (UI «1С-вид», only_regular)
+│   │   ├── debt_snapshots.py # GET /debt-snapshots, /latest, /{id} (?org_statuses, ?workflow_statuses, ?only_regular)
 │   │   ├── debtor_workflow.py # PUT /debtor-workflow/{org_id} — статус+комментарий проработки
+│   │   ├── reports.py      # 4 пресета: debtors, discipline, composition, payments (диапазон дат + фильтр контрагентов)
 │   │   └── alerts.py       # GET /alerts, PATCH /{id}
 │   ├── parser/
 │   │   ├── utils.py        # load_workbook_any() — .xls/.xlsx support
@@ -122,10 +124,14 @@ backend/
 │   │   ├── debt_report.py  # parse_debt_report()
 │   │   └── bank_statement.py # parse_bank_statement()
 │   └── services/
-│       └── import_service.py # ImportService.process_import() + _build_debt_snapshot()
+│       ├── import_service.py # ImportService.process_import() + _build_debt_snapshot() + cross-source dedup
+│       ├── allocation_service.py # AllocationService (видит все источники платежей, обновляет total_debt)
+│       ├── alerts_scheduler.py # CLI-генератор алертов (NON_PAYMENT/UNASSIGNED/CHURN_RISK), запускается cron'ом
+│       └── audit_service.py # write_audit() — хелпер записи в audit_log
 ├── scripts/
-│   └── backfill_debt_snapshot.py # Backfill DebtSnapshot для существующих ImportRun
-└── tests/                  # 252 passed, 9 skipped
+│   ├── backfill_debt_snapshot.py # Backfill DebtSnapshot для существующих ImportRun
+│   └── run_alerts.py       # CLI: python -m scripts.run_alerts (cron 09:00 МСК)
+└── tests/                  # 264 passed, 9 skipped
 frontend/
 ├── nginx.conf              # Reverse proxy config (baked into image)
 ├── Dockerfile              # Multi-stage: node build → nginx
@@ -186,3 +192,11 @@ docker-compose.yml          # db + backend + frontend (без volumes)
 - `debt_snapshots` — полный срез файла «Задолженность покупателей» 1С на момент импорта (1-к-1 с `import_runs`): период, агрегированные итоги по 8 числовым полям, счётчики
 - `debt_snapshot_rows` — строки иерархии снимка (Покупатель/Договор/Документ через `parent_row_id`): все 8 числовых колонок файла + опциональные FK на `organizations`/`contracts`/`documents` для сверки и навигации. Сохраняет физлиц без ИНН (`organization_id=NULL`), которые в основной модели не помещаются из-за UNIQUE inn. См. ADR-019.
 - `debtor_workflow` — состояние проработки дебиторки по клиенту (PK = `organization_id`): статус (`not_started`/`in_progress`/`done`), текстовый комментарий, `updated_at`, `updated_by_id`. Привязка к Organization, а не к строке snapshot — переживает переимпорт 1С. См. ADR-020.
+- `audit_log` — аудит-лог админских действий (create user, reset password, write-off долга, и т.п.): `actor_user_id` (SET NULL при удалении пользователя), снапшот `actor_email`, `action`, `target_type`/`target_id`, JSON `details`, `ip`, `created_at`. Индексы по `action` и `created_at`.
+
+### Поля Organization, добавленные после MVP
+- `OrgStatus.SUPPLIER` — контрагент-поставщик (возвраты на расчётный счёт, не подписка). Полностью исключается из всех агрегатов дашборда через `dashboard_service.excl()`. См. ADR-022.
+- `OrgStatus.TRANSIT` — старая карточка после переоформления на новый ИНН, либо транзитный плательщик. Не начисляется АП, не в Churn rate. См. ADR-017.
+- `churn_month: date | None` — месяц последнего начисления АП для CHURNED (синтетика не создаётся после этой даты). См. ADR-016.
+- `User.must_change_password: bool` — флаг force-password-change на первом логине после создания/сброса пароля admin'ом.
+- `Document.period_year/period_month/period_manual` — структурированные поля периода платежа; **используются AllocationService приоритетнее regex по `raw_name`** независимо от `period_manual` (fix P3.0.5 / 2026-05-29).

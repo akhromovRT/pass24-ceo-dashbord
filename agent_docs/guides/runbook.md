@@ -284,8 +284,31 @@ curl -sS -X POST https://ceo.pass24pro.ru/api/v1/auth/change-password \
 /srv/ceo24/pgdata/             # PostgreSQL data (bind mount в контейнер db)
 /srv/ceo24/backups/            # ежедневные дампы (.dump.gz)
 /usr/local/bin/ceo24-backup.sh # скрипт бэкапа (локальный + S3 offsite)
-/etc/cron.d/ceo24-backup       # cron-задача
+/etc/cron.d/ceo24-backup       # cron-задача бэкапа
+/etc/cron.d/ceo24-alerts       # cron-задача генерации алертов (P3.4) — 09:00 МСК ежедневно
 /etc/ceo24/backup-s3.env       # ключи TimeWeb S3 (chmod 600)
 /var/log/ceo24-backup.log      # лог бэкапов (строки OK local / OK s3)
+/var/log/ceo24-alerts.log      # лог запусков run_alerts (alerts created: total=N ...)
 /swapfile                       # 2 GB swap
 ```
+
+## Алерты (P3.4)
+
+Запускаются раз в день в 09:00 МСК через `/etc/cron.d/ceo24-alerts`:
+- `NON_PAYMENT` — просрочка >=30/60/90 дней (severity INFO/WARNING/CRITICAL)
+- `UNASSIGNED_CLIENT` — клиент в реестре >14 дней без manager_id
+- `CHURN_RISK` — ACTIVE без аллокаций 2 месяца подряд
+
+Идемпотентны: повторно открытый алерт того же type+org не создаётся.
+Ручной dry-run: `cd /root/pass24-ceo-dashbord && docker compose exec -T backend python -m scripts.run_alerts`.
+Логи генерации: `tail -50 /var/log/ceo24-alerts.log`.
+Просмотр открытых алертов: UI `/alerts` или плитка «Требуют внимания» на Dashboard.
+
+## Audit log админских действий
+
+Таблица `audit_log` — все действия admin'ов (`user.create`, `user.reset_password`,
+`organization.write_off_debt`) пишутся через `app.services.audit_service.write_audit`.
+Снапшот `actor_email` сохраняется на случай удаления пользователя.
+Просмотр за период: `docker exec pass24-ceo-dashbord-db-1 psql -U ceo24 -d ceo24
+-c "SELECT created_at, action, actor_email, details FROM audit_log
+WHERE created_at > now() - interval '7 days' ORDER BY created_at DESC;"`
