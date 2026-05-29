@@ -222,3 +222,78 @@ def test_period_manual_overrides_regex_extraction(db_session):
     assert len(pairs) == 1
     assert pairs[0][0].monthly_charge_id == charge_may.id
     assert pairs[0][0].basis == AllocationBasis.EXPLICIT_PERIOD
+
+
+def test_bank_parser_filled_period_used_without_period_manual(db_session):
+    """Регресс: банк-парсер разбил один входящий платёж на N Document с
+    заполненными period_year/period_month, но period_manual=False. До
+    fix'а 2026-05-29 AllocationService игнорировал эти поля и тащил
+    периоды regex'ом из raw_name → 0 аллокаций (инцидент ООО «Веста»).
+    """
+    org, contract = _setup_client(db_session, monthly="12693.45")
+
+    # Charges за дек'25 + янв–май'26 (то же что у Весты, без июня)
+    charges = {}
+    for y, m in [(2025, 12), (2026, 1), (2026, 2), (2026, 3), (2026, 4), (2026, 5)]:
+        charges[(y, m)] = _charge(
+            db_session,
+            org.id,
+            y,
+            m,
+            amount="10990" if (y, m) == (2025, 12) else "12693.45",
+        )
+
+    # 7 Document'ов от банк-парсера (одна транзакция, 7 строк с period_year/month).
+    # period_manual=False — это автоматический парсер, не ручной ввод.
+    common_raw = (
+        "ОПЛАТА ПО ДОГОВОРУ №10297-/10/2024 ОТ 21.10.2024 ЗА ДОСТУП К СИСТЕМЕ "
+        "PASS24.ONLINE ЗА ПЕРИОД ДЕКАБРЬ 2025 — ИЮНЬ 2026 СУММА 87 150,70 РУБ"
+    )
+    for y, m, amt in [
+        (2025, 12, "10990"),
+        (2026, 1, "12693.45"),
+        (2026, 2, "12693.45"),
+        (2026, 3, "12693.45"),
+        (2026, 4, "12693.45"),
+        (2026, 5, "12693.45"),
+        (2026, 6, "12693.45"),  # за июнь — для charge не будет
+    ]:
+        d = Document(
+            contract_id=contract.id,
+            organization_id=org.id,
+            doc_type=DocType.PAYMENT,
+            doc_date=date(2026, 5, 27),
+            amount=Decimal(amt),
+            raw_name=common_raw,
+            period_year=y,
+            period_month=m,
+            period_manual=False,  # ← важно: бан-парсер не ставит manual
+        )
+        db_session.add(d)
+    db_session.flush()
+
+    AllocationService(db_session).recompute_for_organization(org.id)
+    db_session.flush()
+
+    # Главное для бизнеса: 6 charges (дек'25 — май'26) закрыты полностью.
+    # Платёж за июнь'26 — без charge, попадает в ADVANCE (нормально).
+    # До fix'а 2026-05-29 ни одна аллокация не создавалась (AllocationService
+    # игнорировал BANK-IMPORT платежи).
+    all_allocs = db_session.exec(
+        select(PaymentAllocation)
+        .join(Document, Document.id == PaymentAllocation.payment_document_id)
+        .where(Document.organization_id == org.id)
+    ).all()
+    total_allocated_to_charges = sum(
+        a.allocated_amount for a in all_allocs if a.monthly_charge_id is not None
+    )
+    expected_total = sum(c.amount for c in charges.values())
+    assert total_allocated_to_charges == expected_total, (
+        f"должно быть разнесено {expected_total} (сумма всех charges), "
+        f"разнесено {total_allocated_to_charges}"
+    )
+    # Все 6 charges должны быть закрыты (хотя бы одной аллокацией)
+    closed_charges = {a.monthly_charge_id for a in all_allocs if a.monthly_charge_id is not None}
+    assert (
+        len(closed_charges) == 6
+    ), f"должны быть закрыты все 6 charges, закрыто {len(closed_charges)}"

@@ -11,7 +11,6 @@ logger = logging.getLogger(__name__)
 from app.models import (
     AllocationBasis,
     ChargeSource,
-    Contract,
     DocType,
     Document,
     MonthlyCharge,
@@ -37,17 +36,24 @@ class AllocationService:
         )
 
     def _payments(self, org_id) -> list[Document]:
-        """Платежи клиента из реестра «Оплата от покупателей» (синтетический
-        контракт 1C-PAYMENTS), amount > 0, в хронологическом порядке.
-        payment_kind == other исключаются ниже."""
+        """Платежи клиента из всех источников (реестр 1С `1C-PAYMENTS` и
+        банк-выписка `BANK-IMPORT`), amount > 0, в хронологическом порядке.
+        payment_kind == other исключаются ниже.
+
+        Исторически брался только реестр 1С — банк-выписка считалась
+        дубль-каналом (см. ADR-018). После того как 2026-05-28 добавлен
+        cross-source dedup на этапе импорта банка, банк-документы создаются
+        только если того же платежа нет в реестре 1С. Поэтому теперь
+        безопасно разносить и банк-копии — это закрывает кейсы, когда
+        клиент уже заплатил, но 1С ещё не успел отразить (инцидент
+        ООО «Веста» 2026-05-29: 87 150,70 ₽ висели не разнесёнными неделю,
+        потому что AllocationService их не видел).
+        """
         rows = self.session.exec(
-            select(Document)
-            .join(Contract, Contract.id == Document.contract_id)
-            .where(
+            select(Document).where(
                 Document.organization_id == org_id,
                 Document.doc_type == DocType.PAYMENT,
                 Document.amount > 0,
-                Contract.contract_number == _PAYMENTS_CONTRACT,
             )
         ).all()
         result = []
@@ -97,13 +103,17 @@ class AllocationService:
 
             ep = extract_periods(payment.raw_name or "", payment.doc_date or date.today())
 
-            # Ручной ввод приоритетнее regex-результата
-            if payment.period_manual and payment.period_year and payment.period_month:
+            # Структурированное поле period_year/period_month приоритетнее regex.
+            # Заполняется:
+            #  - ручным вводом (тогда period_manual=True),
+            #  - парсером банк-выписки, который умеет разбить один входящий
+            #    платёж на N Document с явными периодами (см. parser/bank_statement.py).
+            # Берём поле, если оно заполнено любым источником (см. инцидент ООО «Веста»
+            # 2026-05-29). Особый кейс period_manual без period_year/month сохраняем —
+            # это нарушение инварианта, заслуживающее логирования.
+            if payment.period_year and payment.period_month:
                 ep.periods = [(payment.period_year, payment.period_month)]
             elif payment.period_manual:
-                # period_manual=True, но период не задан — нарушение инварианта
-                # (нормальный путь импорта всегда пишет year/month вместе с флагом).
-                # Не прерываем пересчёт, но делаем проблему видимой.
                 logger.warning(
                     "Document %s: period_manual=True, но period_year/period_month "
                     "не заданы — разнесение по regex из raw_name",
