@@ -29,9 +29,10 @@ from app.services.dashboard_service import accrued_by_month as _accrued_by_month
 from app.services.dashboard_service import collected_by_charge_month as _collected_by_charge_month
 from app.services.dashboard_service import excl as _excl
 from app.services.dashboard_service import first_pay_rows as _first_pay_rows_q
-from app.services.dashboard_service import last_pay_rows as _last_pay_rows_q
 from app.services.dashboard_service import months_back as _months_back
 from app.services.dashboard_service import plan_mrr_total as _plan_mrr_total
+from app.services.dashboard_service import prepaid_current_ids as _prepaid_current_ids
+from app.services.dashboard_service import stopped_since_year_start_ids as _stopped_ids
 from app.services.dashboard_service import to_float as _f
 
 router = APIRouter(
@@ -147,12 +148,15 @@ def dashboard_summary(session: Session = Depends(get_session)):
             .where(Document.doc_type == DocType.PAYMENT, Document.doc_date >= cutoff_60)
         ).all()
     )
-    churned_60d = sum(1 for oid in paying_active if oid not in recently_paid_ids)
+    # Предоплативших вперёд (оплата по текущий месяц и далее) в отток не считаем —
+    # последний платёж у них может быть давно, но подписка закрыта (Софья 2026-06-02).
+    prepaid_ids = _prepaid_current_ids(session, today)
+    churned_60d = sum(
+        1 for oid in paying_active if oid not in recently_paid_ids and oid not in prepaid_ids
+    )
 
     # --- метрики клиентской базы --------------------------------------------
-    year_start = date(today.year, 1, 1)
     first_pay_rows = _first_pay_rows_q(session)
-    last_pay_rows = _last_pay_rows_q(session)
     new_paid_prev_month = sum(
         1 for _oid, d in first_pay_rows if d is not None and d.year == prev_y and d.month == prev_m
     )
@@ -165,17 +169,10 @@ def dashboard_summary(session: Session = Depends(get_session)):
     new_paid_curr_year = sum(
         1 for _oid, d in first_pay_rows if d is not None and d.year == today.year
     )
-    # TRANSIT — юр.лица, переставшие платить (переоформление ИНН либо
-    # транзитные плательщики за других клиентов). В отток их не учитываем.
-    transit_ids = set(
-        session.exec(select(Organization.id).where(Organization.status == OrgStatus.TRANSIT)).all()
-    )
-    # перестали платить с начала года: последний платёж в этом году, >60 дней назад
-    stopped_since_year_start = sum(
-        1
-        for oid, d in last_pay_rows
-        if d is not None and year_start <= d <= cutoff_60 and oid not in transit_ids
-    )
+    # Перестали платить с начала года (гибрид: леджер + статус). Авто-детект
+    # исключает предоплативших вперёд; плюс вручную помеченные CHURNED этого года.
+    # TRANSIT исключены внутри хелпера (Софья 2026-06-02).
+    stopped_since_year_start = len(_stopped_ids(session, today))
     # база для churn rate — клиенты, у которых был платёж в прошлом году
     # (TRANSIT исключены — они не клиенты сами, а плательщики за других)
     paying_base = session.exec(

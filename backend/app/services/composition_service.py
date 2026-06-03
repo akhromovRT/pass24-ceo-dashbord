@@ -4,7 +4,7 @@ Backend для пресета composition в /reports. Для каждой ме�
 возвращает список клиентов, формирующих её значение, и поддерживает
 control_value — сумму/счёт, обязанную совпасть с плиткой Dashboard."""
 
-from datetime import date, timedelta
+from datetime import date
 
 from sqlmodel import Session, func, select
 
@@ -19,6 +19,7 @@ from app.services.dashboard_service import (
     excl,
     first_pay_rows,
     last_pay_rows,
+    stopped_since_year_start_ids,
     to_float,
 )
 
@@ -257,10 +258,10 @@ def _build_new_paid_curr_month(session: Session, c) -> list[dict]:
 
 def _build_stopped(session: Session, c) -> list[dict]:
     today = date.today()
-    year_start = date(today.year, 1, 1)
-    cutoff_60 = today - timedelta(days=60)
+    # Гибрид (леджер + статус): тот же набор клиентов, что и плитка дашборда —
+    # авто-детект без предоплативших вперёд + вручную помеченные CHURNED.
     last_pay = dict(last_pay_rows(session))
-    target_ids = {oid for oid, d in last_pay.items() if d and year_start <= d <= cutoff_60}
+    target_ids = stopped_since_year_start_ids(session, today)
     if not target_ids:
         return []
     base = select(Organization).where(Organization.id.in_(list(target_ids)))  # type: ignore[union-attr]
