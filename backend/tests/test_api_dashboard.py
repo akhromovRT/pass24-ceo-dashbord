@@ -194,6 +194,7 @@ def test_summary_client_base_metrics(client, db_session: Session):
         "new_paid_curr_month",
         "new_paid_curr_year",
         "stopped_since_year_start",
+        "active_overdue",
         "churn_rate",
     ):
         assert key in body

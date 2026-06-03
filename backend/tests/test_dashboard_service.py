@@ -18,13 +18,14 @@ from app.models import (
     PaymentAllocation,
 )
 from app.services.dashboard_service import (
+    active_overdue_ids,
+    churned_this_year_ids,
     collected_by_charge_month,
     first_pay_rows,
     last_pay_rows,
     max_covered_month,
     plan_mrr_total,
     prepaid_current_ids,
-    stopped_since_year_start_ids,
 )
 
 
@@ -145,29 +146,45 @@ def test_prepaid_current_ids_excludes_lapsed_includes_prepaid(db_session: Sessio
     assert cur_org.id in prepaid_current_ids(db_session, today)
 
 
-def test_stopped_excludes_prepaid_clients(db_session: Session):
-    """Кейс Кутузовской Ривьеры: последний платёж давно, но оплачено вперёд."""
+def test_active_overdue_excludes_prepaid_clients(db_session: Session):
+    """Активные с просрочкой: последний платёж давно И не оплачено вперёд.
+    Предоплативший вперёд (кейс Кутузовской) сюда не попадает."""
     today = date.today()
     year_start = date(today.year, 1, 1)
     long_ago = today - timedelta(days=70)
     if long_ago < year_start:
         return  # в начале года кейс не воспроизводится — пропускаем
 
-    prepaid = _org(db_session, "50", name="Prepaid", status=OrgStatus.ACTIVE)
+    prepaid = _org(db_session, "50", name="Prepaid", status=OrgStatus.ACTIVE, monthly_ap=1000)
     ch_cur = _charge(db_session, prepaid, today.year, today.month, 1000)
     _pay(db_session, prepaid, ch_cur, 1000, long_ago)  # оплатил текущий месяц давно
 
-    truly_stopped = _org(db_session, "51", name="Stopped", status=OrgStatus.ACTIVE)
-    ch_old = _charge(db_session, truly_stopped, long_ago.year, long_ago.month, 1000)
-    _pay(db_session, truly_stopped, ch_old, 1000, long_ago)
+    overdue = _org(db_session, "51", name="Overdue", status=OrgStatus.ACTIVE, monthly_ap=1000)
+    ch_old = _charge(db_session, overdue, long_ago.year, long_ago.month, 1000)
+    _pay(db_session, overdue, ch_old, 1000, long_ago)
 
-    ids = stopped_since_year_start_ids(db_session, today)
-    assert prepaid.id not in ids  # предоплата вперёд — не отток
-    assert truly_stopped.id in ids
+    ids = active_overdue_ids(db_session, today)
+    assert prepaid.id not in ids  # предоплата вперёд — не просрочка
+    assert overdue.id in ids
 
 
-def test_stopped_includes_manual_churned_this_year(db_session: Session):
+def test_active_overdue_excludes_non_active_statuses(db_session: Session):
+    """PROSPECT/TRANSIT/CHURNED не попадают в «активные с просрочкой»."""
     today = date.today()
+    year_start = date(today.year, 1, 1)
+    long_ago = today - timedelta(days=70)
+    if long_ago < year_start:
+        return
+    prospect = _org(db_session, "52", name="Prospect", status=OrgStatus.PROSPECT, monthly_ap=1000)
+    ch = _charge(db_session, prospect, long_ago.year, long_ago.month, 1000)
+    _pay(db_session, prospect, ch, 1000, long_ago)
+    assert prospect.id not in active_overdue_ids(db_session, today)
+
+
+def test_churned_this_year_is_status_driven(db_session: Session):
+    """Отток = только CHURNED с churn_month этого года; активный должник — нет."""
+    today = date.today()
+    long_ago = today - timedelta(days=70)
     churned = _org(
         db_session,
         "60",
@@ -175,5 +192,11 @@ def test_stopped_includes_manual_churned_this_year(db_session: Session):
         status=OrgStatus.CHURNED,
         churn_month=date(today.year, 1, 1),
     )
-    ids = stopped_since_year_start_ids(db_session, today)
+    # активный должник с давним платежом — НЕ отток (это active_overdue)
+    active_debtor = _org(db_session, "61", name="Debtor", status=OrgStatus.ACTIVE, monthly_ap=1000)
+    ch = _charge(db_session, active_debtor, long_ago.year, long_ago.month, 1000)
+    _pay(db_session, active_debtor, ch, 1000, long_ago)
+
+    ids = churned_this_year_ids(db_session, today)
     assert churned.id in ids
+    assert active_debtor.id not in ids

@@ -37,6 +37,7 @@ type MetricKey =
   | 'new_paid_prev_month'
   | 'new_paid_curr_month'
   | 'stopped_since_year_start'
+  | 'active_overdue'
 
 type MetricOption = { value: MetricKey; label: string; period: 'month' | 'year' | 'none' }
 
@@ -49,6 +50,7 @@ const METRIC_OPTIONS: MetricOption[] = [
   { value: 'new_paid_prev_month',      label: 'Новые за прошлый месяц',       period: 'month' },
   { value: 'new_paid_curr_month',      label: 'Новые за текущий месяц',       period: 'month' },
   { value: 'stopped_since_year_start', label: 'Отток с начала года',          period: 'none' },
+  { value: 'active_overdue',           label: 'Активные с просрочкой',         period: 'none' },
 ]
 
 function metricPeriodKind(m: string | null): 'month' | 'year' | 'none' {

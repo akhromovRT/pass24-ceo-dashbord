@@ -160,32 +160,17 @@ def prepaid_current_ids(session: Session, today: date | None = None) -> set[uuid
     return {oid for oid, mm in max_covered_month(session).items() if mm >= cur}
 
 
-def stopped_since_year_start_ids(session: Session, today: date | None = None) -> set[uuid.UUID]:
-    """Клиенты, переставшие платить с начала года (гибрид: леджер + статус).
+def churned_this_year_ids(session: Session, today: date | None = None) -> set[uuid.UUID]:
+    """Отток с начала года — статус-driven (выверено вручную по 1С).
 
-    Авто-детект: последний платёж в этом году, но >60 дней назад, И подписка
-    НЕ оплачена вперёд (предоплата исчерпана). Плюс — всегда вручную
-    помеченные CHURNED с месяцем отключения в этом году. TRANSIT исключаем
-    (это плательщики за других, не клиенты сами по себе)."""
+    Только клиенты со статусом `CHURNED` и месяцем отключения в этом году.
+    Машина не может отличить «ушёл» от «активный должник» по дате платежа —
+    это решает Софья при сверке транзакций в 1С (решение CEO 2026-06-03,
+    ADR-024). Авто-детект просрочки — отдельный сигнал `active_overdue_ids`."""
     if today is None:
         today = date.today()
     year_start = date(today.year, 1, 1)
-    cutoff_60 = today - timedelta(days=60)
-
-    last_pay = dict(last_pay_rows(session))  # уже отфильтровано excl()
-    transit_ids = set(
-        session.exec(select(Organization.id).where(Organization.status == OrgStatus.TRANSIT)).all()
-    )
-    prepaid = prepaid_current_ids(session, today)
-    auto = {
-        oid
-        for oid, d in last_pay.items()
-        if d is not None
-        and year_start <= d <= cutoff_60
-        and oid not in transit_ids
-        and oid not in prepaid
-    }
-    manual = set(
+    return set(
         session.exec(
             select(Organization.id).where(
                 excl(),
@@ -195,7 +180,41 @@ def stopped_since_year_start_ids(session: Session, today: date | None = None) ->
             )
         ).all()
     )
-    return auto | manual
+
+
+def active_overdue_ids(session: Session, today: date | None = None) -> set[uuid.UUID]:
+    """Активные клиенты с просрочкой оплаты (сигнал для взыскания, не отток).
+
+    Статус ACTIVE, есть АП, последний платёж в этом году но >60 дней назад,
+    подписка НЕ оплачена вперёд. PROSPECT/TRANSIT/SUPPLIER/CHURNED сюда не
+    попадают (только ACTIVE). Это бывший авто-детект «перестали платить» —
+    после решения CEO он больше не называется оттоком (ADR-024)."""
+    if today is None:
+        today = date.today()
+    year_start = date(today.year, 1, 1)
+    cutoff_60 = today - timedelta(days=60)
+    active_ids = set(
+        session.exec(
+            select(Organization.id).where(
+                excl(),
+                Organization.status == OrgStatus.ACTIVE,
+                Organization.monthly_ap.is_not(None),  # type: ignore[union-attr]
+                Organization.monthly_ap > 0,  # type: ignore[operator]
+            )
+        ).all()
+    )
+    if not active_ids:
+        return set()
+    last_pay = dict(last_pay_rows(session))  # уже отфильтровано excl()
+    prepaid = prepaid_current_ids(session, today)
+    return {
+        oid
+        for oid, d in last_pay.items()
+        if oid in active_ids
+        and d is not None
+        and year_start <= d <= cutoff_60
+        and oid not in prepaid
+    }
 
 
 def months_back(n: int, today: date | None = None) -> list[tuple[int, int]]:

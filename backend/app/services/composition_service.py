@@ -16,10 +16,11 @@ from app.models import (
     User,
 )
 from app.services.dashboard_service import (
+    active_overdue_ids,
+    churned_this_year_ids,
     excl,
     first_pay_rows,
     last_pay_rows,
-    stopped_since_year_start_ids,
     to_float,
 )
 
@@ -64,7 +65,8 @@ _COLS_BY_METRIC: dict[str, list[str]] = {
     "new_paid_curr_year": _BASE_COLS + ["first_payment_date"],
     "new_paid_prev_month": _BASE_COLS + ["first_payment_date"],
     "new_paid_curr_month": _BASE_COLS + ["first_payment_date"],
-    "stopped_since_year_start": _BASE_COLS + ["last_payment_date", "days_since_last"],
+    "stopped_since_year_start": _BASE_COLS + ["last_payment_date"],
+    "active_overdue": _BASE_COLS + ["last_payment_date", "days_since_last"],
 }
 
 MONEY_METRICS = {"mrr_fact", "collected_current", "mrr_plan"}
@@ -256,14 +258,13 @@ def _build_new_paid_curr_month(session: Session, c) -> list[dict]:
     return _build_new_paid_in_month(session, c, today.year, today.month)
 
 
-def _build_stopped(session: Session, c) -> list[dict]:
+def _materialize_overdue_like(session: Session, c, target_ids: set) -> list[dict]:
+    """Общая материализация для оттока и активных с просрочкой:
+    строка клиента + дата последнего платежа + дней с него."""
     today = date.today()
-    # Гибрид (леджер + статус): тот же набор клиентов, что и плитка дашборда —
-    # авто-детект без предоплативших вперёд + вручную помеченные CHURNED.
-    last_pay = dict(last_pay_rows(session))
-    target_ids = stopped_since_year_start_ids(session, today)
     if not target_ids:
         return []
+    last_pay = dict(last_pay_rows(session))
     base = select(Organization).where(Organization.id.in_(list(target_ids)))  # type: ignore[union-attr]
     base = _apply_org_filters(base, c)
     orgs = list(session.exec(base).all())
@@ -279,6 +280,16 @@ def _build_stopped(session: Session, c) -> list[dict]:
     return out
 
 
+def _build_churned(session: Session, c) -> list[dict]:
+    """Отток — статус-driven (CHURNED этого года, выверено по 1С, ADR-024)."""
+    return _materialize_overdue_like(session, c, churned_this_year_ids(session, date.today()))
+
+
+def _build_active_overdue(session: Session, c) -> list[dict]:
+    """Активные с просрочкой — сигнал для взыскания (не отток)."""
+    return _materialize_overdue_like(session, c, active_overdue_ids(session, date.today()))
+
+
 # --- dispatcher -------------------------------------------------------------
 
 _DISPATCH: dict = {
@@ -289,7 +300,8 @@ _DISPATCH: dict = {
     "new_paid_curr_year": _build_new_paid_curr_year,
     "new_paid_prev_month": _build_new_paid_prev_month,
     "new_paid_curr_month": _build_new_paid_curr_month,
-    "stopped_since_year_start": _build_stopped,
+    "stopped_since_year_start": _build_churned,
+    "active_overdue": _build_active_overdue,
 }
 
 

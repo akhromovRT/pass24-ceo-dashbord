@@ -189,3 +189,9 @@ def test_inv_stopped_since_year_start(client, populated):
     s = _summary(client)
     control = _control(client, "stopped_since_year_start")
     assert s["stopped_since_year_start"] == control
+
+
+def test_inv_active_overdue(client, populated):
+    s = _summary(client)
+    control = _control(client, "active_overdue")
+    assert s["active_overdue"] == control

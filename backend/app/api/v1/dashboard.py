@@ -26,13 +26,14 @@ from app.models import (
 )
 from app.services.aging import debt_aging
 from app.services.dashboard_service import accrued_by_month as _accrued_by_month
+from app.services.dashboard_service import active_overdue_ids as _active_overdue_ids
+from app.services.dashboard_service import churned_this_year_ids as _churned_ids
 from app.services.dashboard_service import collected_by_charge_month as _collected_by_charge_month
 from app.services.dashboard_service import excl as _excl
 from app.services.dashboard_service import first_pay_rows as _first_pay_rows_q
 from app.services.dashboard_service import months_back as _months_back
 from app.services.dashboard_service import plan_mrr_total as _plan_mrr_total
 from app.services.dashboard_service import prepaid_current_ids as _prepaid_current_ids
-from app.services.dashboard_service import stopped_since_year_start_ids as _stopped_ids
 from app.services.dashboard_service import to_float as _f
 
 router = APIRouter(
@@ -169,10 +170,12 @@ def dashboard_summary(session: Session = Depends(get_session)):
     new_paid_curr_year = sum(
         1 for _oid, d in first_pay_rows if d is not None and d.year == today.year
     )
-    # Перестали платить с начала года (гибрид: леджер + статус). Авто-детект
-    # исключает предоплативших вперёд; плюс вручную помеченные CHURNED этого года.
-    # TRANSIT исключены внутри хелпера (Софья 2026-06-02).
-    stopped_since_year_start = len(_stopped_ids(session, today))
+    # Отток с начала года — статус-driven (выверено вручную по 1С, ADR-024):
+    # только клиенты со статусом CHURNED и месяцем отключения в этом году.
+    stopped_since_year_start = len(_churned_ids(session, today))
+    # Активные с просрочкой — отдельный сигнал для взыскания (бывший авто-детект),
+    # уже без предоплативших вперёд; PROSPECT/TRANSIT/SUPPLIER не входят.
+    active_overdue = len(_active_overdue_ids(session, today))
     # база для churn rate — клиенты, у которых был платёж в прошлом году
     # (TRANSIT исключены — они не клиенты сами, а плательщики за других)
     paying_base = session.exec(
@@ -218,6 +221,7 @@ def dashboard_summary(session: Session = Depends(get_session)):
         "new_paid_curr_month": new_paid_curr_month,
         "new_paid_curr_year": new_paid_curr_year,
         "stopped_since_year_start": stopped_since_year_start,
+        "active_overdue": active_overdue,
         "churn_rate": churn_rate,
         "mom_mrr_delta_pct": mom_pct,
         "fact_month": f"{prev_y}-{prev_m:02d}",

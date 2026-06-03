@@ -247,26 +247,48 @@ def test_new_paid_curr_month(db_session: Session):
 # --- stopped_since_year_start ---------------------------------------------
 
 
-def test_stopped_since_year_start(db_session: Session):
+def test_stopped_since_year_start_is_status_driven(db_session: Session):
+    """Отток = только CHURNED этого года (ADR-024). Активный должник — не отток."""
+    today = date.today()
+    long_ago = today - timedelta(days=70)
+
+    _org(
+        db_session,
+        "90",
+        name="Churned",
+        status=OrgStatus.CHURNED,
+        churn_month=date(today.year, 1, 1),
+    )
+    active_debtor = _org(db_session, "91", name="Debtor", status=OrgStatus.ACTIVE, monthly_ap=100)
+    ch = _charge(db_session, active_debtor, long_ago.year, long_ago.month, 100)
+    _pay(db_session, active_debtor, ch, 100, long_ago)
+
+    rows = build_composition_report(db_session, ReportCriteria(metric="stopped_since_year_start"))
+    assert {r["name"] for r in rows} == {"Churned"}
+    assert control_value_for("stopped_since_year_start", rows) == 1
+
+
+def test_active_overdue_lists_active_debtors(db_session: Session):
+    """Активные с просрочкой: ACTIVE, давний платёж, не оплачено вперёд."""
     today = date.today()
     year_start = date(today.year, 1, 1)
-    long_ago = today - timedelta(days=70)  # > 60 дней назад
+    long_ago = today - timedelta(days=70)
+    if long_ago < year_start:
+        return
 
-    a = _org(db_session, "90", name="A-stopped", status=OrgStatus.ACTIVE)
-    b = _org(db_session, "91", name="B-active", status=OrgStatus.ACTIVE)
-    ch_a = _charge(db_session, a, long_ago.year, long_ago.month, 100)
-    ch_b = _charge(db_session, b, today.year, today.month, 100)
-    _pay(db_session, a, ch_a, 100, long_ago)
-    _pay(db_session, b, ch_b, 100, today.replace(day=1))
+    debtor = _org(db_session, "92", name="Debtor", status=OrgStatus.ACTIVE, monthly_ap=100)
+    ch = _charge(db_session, debtor, long_ago.year, long_ago.month, 100)
+    _pay(db_session, debtor, ch, 100, long_ago)
+    # отток (CHURNED) не должен попадать в active_overdue
+    _org(
+        db_session,
+        "93",
+        name="Churned",
+        status=OrgStatus.CHURNED,
+        churn_month=date(today.year, 1, 1),
+    )
 
-    criteria = ReportCriteria(metric="stopped_since_year_start")
-    rows = build_composition_report(db_session, criteria)
-    if long_ago >= year_start:
-        assert {r["name"] for r in rows} == {"A-stopped"}
-        row = rows[0]
-        assert row["last_payment_date"] == long_ago.isoformat()
-        assert row["days_since_last"] >= 60
-        assert control_value_for("stopped_since_year_start", rows) == 1
-    else:
-        # 70 дней назад = прошлый год — клиент не попадает в диапазон
-        assert rows == []
+    rows = build_composition_report(db_session, ReportCriteria(metric="active_overdue"))
+    assert {r["name"] for r in rows} == {"Debtor"}
+    assert rows[0]["days_since_last"] >= 60
+    assert control_value_for("active_overdue", rows) == 1
