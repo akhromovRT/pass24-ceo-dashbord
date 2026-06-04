@@ -299,18 +299,23 @@ def test_bank_parser_filled_period_used_without_period_manual(db_session):
     ), f"должны быть закрыты все 6 charges, закрыто {len(closed_charges)}"
 
 
-def test_total_debt_synced_from_ledger(db_session):
-    """P3.0.5.1: после recompute Organization.total_debt = сумма
-    непогашенных charges. Раньше total_debt обновлялся только при импорте
-    debt-report'а из 1С, что давало рассинхрон когда платежи пришли позже.
-    """
+def test_total_debt_not_overwritten_by_ledger(db_session):
+    """ADR-025: источник истины для Organization.total_debt — импорт
+    долгового отчёта 1С, а НЕ AR-леджер. recompute_for_organization
+    пересобирает аллокации, но total_debt не трогает.
+
+    Регресс на дрейф 2026-06-04: P3.0.5.1 (`_sync_total_debt`) перезаписывал
+    total_debt суммой непогашенных charges леджера, который завышал долг
+    (фантомные начисления вперёд, незахваченные зачёты 1С) — дашборд уехал
+    с 3,98M до 8,22M. 1С — master финансов, total_debt = его значение."""
     org, contract = _setup_client(db_session, monthly="10000")
-    # Изначально вручную «зашитый» total_debt из старого 1С-импорта
+    # total_debt из импорта 1С-отчёта — единственный авторитетный источник
     org.total_debt = Decimal("99999.99")
     db_session.add(org)
     db_session.flush()
 
-    # 2 charges, оплачен только первый — должен остаться долг 10000
+    # 2 charges, оплачен только первый: леджер посчитал бы долг 10000,
+    # но total_debt должен остаться 1С-значением, не подмениться леджером.
     _charge(db_session, org.id, 2026, 1, amount="10000")
     _charge(db_session, org.id, 2026, 2, amount="10000")
     _payment(
@@ -326,19 +331,5 @@ def test_total_debt_synced_from_ledger(db_session):
     AllocationService(db_session).recompute_for_organization(org.id)
     db_session.commit()
     db_session.refresh(org)
-    assert org.total_debt == Decimal("10000.00")
-
-    # Дозакрыли — total_debt = 0
-    _payment(
-        db_session,
-        org.id,
-        contract.id,
-        date(2026, 2, 10),
-        "10000",
-        raw_name="оплата за февраль 2026",
-    )
-    db_session.flush()
-    AllocationService(db_session).recompute_for_organization(org.id)
-    db_session.commit()
-    db_session.refresh(org)
-    assert org.total_debt == Decimal("0.00")
+    # Леджер НЕ перезаписал total_debt — осталось значение из 1С-импорта.
+    assert org.total_debt == Decimal("99999.99")
